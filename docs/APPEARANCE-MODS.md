@@ -10,6 +10,8 @@ This is a declarative appearance API, not a loader for arbitrary JavaScript, CSS
 
 ## Install
 
+> **First-time setup: expect to log in to all your websites again.** Search Mod Preview uses a separate profile and does not automatically carry over Search’s cookies, active sign-ins, or saved-password access. Your existing Search data and sign-ins remain in the original app. This applies when first switching to the preview; updating an existing preview installation retains its own profile.
+
 1. Download and unzip **Search-Appearance-Mod-Loader-macOS-arm64.zip** from the loader’s GitHub release. Requires Apple Silicon and macOS 14+. Intel users must build locally.
 2. Move **Search Mod Preview.app** to Applications under that name, keeping your existing Search.
 3. Open it. This preview is ad-hoc signed, not notarized. If macOS blocks it, use System Settings → Privacy & Security → Open Anyway for this app.

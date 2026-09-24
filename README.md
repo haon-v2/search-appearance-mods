@@ -15,6 +15,8 @@ The host keeps Search’s WebKit engine, page lifecycle, and browsing features. 
 
 ## Try the loader
 
+> **First-time setup: expect to log in to all your websites again.** Search Mod Preview uses a separate profile and does not automatically carry over Search’s cookies, active sign-ins, or saved-password access. Your existing Search data and sign-ins remain in the original app. This applies when first switching to the preview; updating an existing preview installation retains its own profile.
+
 Download **Search-Appearance-Mod-Loader-macOS-arm64.zip** from [Releases](https://github.com/haon-v2/search-appearance-mods/releases). The app is called **Search Mod Preview**, retains Search’s original app icon, and keeps its profile separate from installed Search and Curve. Apple Silicon, macOS 14+. Locally signed, not notarized.
 
 1. Unzip and move **Search Mod Preview.app** to Applications, keeping its name.
