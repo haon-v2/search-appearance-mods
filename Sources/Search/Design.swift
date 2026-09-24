@@ -26,13 +26,13 @@ enum Palette {
     /// The same colours for the AppKit corners of the app — a text field's
     /// ink, a window's background — which want an NSColor and keep it.
     enum NS {
-        static let ground = pair(1.0, 0.11)
-        static let ink = pair(0.09, 0.93)
-        static let muted = pair(0.55, 0.58)
-        static let faint = pair(0.83, 0.32)
-        static let hairline = pair(0.91, 0.20)
-        static let wash = pair(0.937, 0.175)
-        static let hover = pair(0.965, 0.15)
+        static let ground = pair(1.0, 0.11, role: "ground")
+        static let ink = pair(0.09, 0.93, role: "ink")
+        static let muted = pair(0.55, 0.58, role: "muted")
+        static let faint = pair(0.83, 0.32, role: "faint")
+        static let hairline = pair(0.91, 0.20, role: "hairline")
+        static let wash = pair(0.937, 0.175, role: "wash")
+        static let hover = pair(0.965, 0.15, role: "hover")
         /// The resting traffic lights, drawn by hand when the app is behind.
         static let resting = pair(0.80, 0.30)
         static let safe = tint(light: (0.08, 0.50, 0.24), dark: (0.29, 0.87, 0.50))
@@ -45,9 +45,10 @@ enum Palette {
             }
         }
 
-        private static func pair(_ light: CGFloat, _ dark: CGFloat) -> NSColor {
+        private static func pair(_ light: CGFloat, _ dark: CGFloat, role: String? = nil) -> NSColor {
             NSColor(name: nil) { appearance in
                 let dim = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+                if let role, let color = AppearanceColors.color(role: role, dark: dim) { return color }
                 return NSColor(white: dim ? dark : light, alpha: 1)
             }
         }

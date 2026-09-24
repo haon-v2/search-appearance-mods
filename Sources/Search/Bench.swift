@@ -233,6 +233,38 @@ final class Bench {
         let verb = request["do"] as? String ?? ""
 
         switch verb {
+        case "appearance":
+            guard Store.testing else { answer(["error": "Appearance test commands require an isolated test run."]); return }
+            let mods = AppearanceMods.shared
+            if let page = request["settingsPage"] as? String, SettingsPanel.Page(rawValue: page) != nil { Store.settings.set(page, forKey: "settings.page") }
+            let views = Dictionary(uniqueKeysWithValues: browser.tabs.compactMap { tab in tab.built.map { (tab.id.uuidString, String(describing: ObjectIdentifier($0))) } })
+            do {
+                if let path = request["install"] as? String { try mods.install(URL(fileURLWithPath: path)) }
+                if let id = request["enable"] as? String { mods.select(id.isEmpty ? nil : id) }
+                if let id = request["remove"] as? String { try mods.remove(id) }
+                if request["reload"] as? Bool == true { mods.reload() }
+                func rail(in view: NSView) -> EdgeRailView? {
+                    if let rail = view as? EdgeRailView { return rail }
+                    return view.subviews.lazy.compactMap { rail(in: $0) }.first
+                }
+                if let view = Links.window?.contentView.flatMap({ rail(in: $0) }) {
+                    if let offset = request["offset"] as? Double { view.setOffset(offset, animated: false) }
+                    if let distance = request["click"] as? Double {
+                        let p = view.geometry.point(distance), point = view.convert(NSPoint(x: p.x, y: p.y), to: nil)
+                        if let event = NSEvent.mouseEvent(with: .leftMouseDown, location: point, modifierFlags: [], timestamp: 0, windowNumber: view.window?.windowNumber ?? 0, context: nil, eventNumber: 0, clickCount: 1, pressure: 1) { view.mouseDown(with: event); view.mouseUp(with: event) }
+                    }
+                    if let from = request["dragFrom"] as? Double, let to = request["dragTo"] as? Double {
+                        for (type, distance) in [(NSEvent.EventType.leftMouseDown, from), (.leftMouseDragged, to), (.leftMouseUp, to)] {
+                            let p = view.geometry.point(distance), point = view.convert(NSPoint(x:p.x,y:p.y),to:nil)
+                            if let event=NSEvent.mouseEvent(with:type,location:point,modifierFlags:[],timestamp:0,windowNumber:view.window?.windowNumber ?? 0,context:nil,eventNumber:0,clickCount:1,pressure:1) {
+                                if type == .leftMouseDown { view.mouseDown(with:event) } else if type == .leftMouseDragged { view.mouseDragged(with:event) } else { view.mouseUp(with:event) }
+                            }
+                        }
+                    }
+                    answer(["enabled":mods.selectedID ?? "", "installed":mods.installed.map(\.id), "rail":true, "width":view.bounds.width, "height":view.bounds.height, "leading":view.leading, "length":view.geometry.length, "straight":view.geometry.straight, "offset":view.offset, "maximum":view.maximum, "tabs":browser.tabs.map(describe), "built":browser.tabs.filter{$0.built != nil}.count, "views":views])
+                } else { answer(["enabled":mods.selectedID ?? "", "installed":mods.installed.map(\.id), "rail":false, "built":browser.tabs.filter{$0.built != nil}.count, "views":views]) }
+            } catch { answer(["error":error.localizedDescription]) }
+
         case "tabs":
             answer(["tabs": browser.tabs.map(describe)])
 
@@ -745,7 +777,7 @@ final class Bench {
                 return
             }
             let items = NSApp.mainMenu?.items.first { $0.submenu?.title == "Window" }?.submenu?.items ?? []
-            guard let item = items.first(where: { $0.title == "Search" }), let action = item.action else {
+            guard let item = items.first(where: { $0.title == "Search Mod Preview" }), let action = item.action else {
                 answer(["error": "no Search item in the Window menu", "items": items.map(\.title)])
                 return
             }

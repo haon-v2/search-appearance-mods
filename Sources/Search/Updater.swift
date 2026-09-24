@@ -113,6 +113,7 @@ final class Updater: ObservableObject {
     /// At launch: once a day, quietly. A test run, pointed at its own feed,
     /// checks every time.
     func checkIfDue(then say: @escaping (String) -> Void) {
+        guard Bundle.main.bundleIdentifier == "com.officecommun.search" else { return }
         self.say = say
         Swap.sweep()
         // And again every hour for as long as the app is up — a browser that
@@ -138,6 +139,7 @@ final class Updater: ObservableObject {
     /// names, or nil when this is the latest; what becomes of it after that
     /// is said through the line handed to `checkIfDue`.
     func check(then done: @escaping (Release?) -> Void) {
+        guard Bundle.main.bundleIdentifier == "com.officecommun.search" else { done(nil); return }
         guard !checking else { return }
         checking = true
         Task { [weak self] in

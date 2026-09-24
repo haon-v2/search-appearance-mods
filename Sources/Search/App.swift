@@ -11,7 +11,7 @@ struct SearchApp: App {
     @NSApplicationDelegateAdaptor(Links.self) private var links
 
     var body: some Scene {
-        Window("Search", id: "browser") {
+        Window("Search Mod Preview", id: "browser") {
             ContentView(browser: browser)
                 .frame(minWidth: 640, minHeight: 420)
         }
@@ -254,6 +254,7 @@ private final class CursorGroundView: NSView {
 }
 
 struct ContentView: View {
+    @ObservedObject private var appearanceMods = AppearanceMods.shared
     @ObservedObject var browser: Browser
 
     @State private var keys: Any?
@@ -282,7 +283,10 @@ struct ContentView: View {
             // again thirty times a second, the page juddered along its right
             // edge and overshot the window with the spring (see `room`).
             stage
-                .padding(.leading, roomed.width)
+                .clipShape(EdgeRailPageShape(curved: edgeRailVisible, radius: appearanceMods.active?.rail?.cornerRadius ?? 64))
+                .padding(.trailing, edgeRailVisible ? 48 : 0)
+                .padding(.bottom, edgeRailVisible ? 8 : 0)
+                .padding(.leading, edgeRailVisible ? 8 : roomed.width)
                 .padding(.top, roomed.height)
                 .offset(x: chrome.width - roomed.width, y: chrome.height - roomed.height)
 
@@ -296,7 +300,7 @@ struct ContentView: View {
             }
 
             if !browser.prefs.sidebar, !browser.folded, browser.active?.immersed != true {
-                TabBar(browser: browser)
+                AppearanceTabChrome(browser: browser)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
@@ -396,7 +400,10 @@ struct ContentView: View {
                 // Centred on the page, not on the window. The column of tabs
                 // is not what the field is standing over, and dimming it along
                 // with the page says otherwise.
-                .padding(.leading, sidebar ? browser.prefs.sideWidth : 0)
+                .padding(.leading, sidebar ? browser.prefs.sideWidth : (edgeRailVisible ? 8 : 0))
+                .padding(.trailing, edgeRailVisible ? 48 : 0)
+                .padding(.top, edgeRailVisible ? 50 : 0)
+                .padding(.bottom, edgeRailVisible ? 8 : 0)
                 .transition(.scale(scale: 0.97).combined(with: .opacity))
         }
     }
@@ -646,10 +653,12 @@ struct ContentView: View {
 
     /// The column has its own corner for the lights, so the page beside it
     /// starts at the very top; the strip needs a band.
+    private var edgeRailVisible: Bool { appearanceMods.usesEdgeRail && !browser.prefs.sidebar && !browser.folded && browser.active?.immersed != true }
+
     private var band: CGFloat {
         guard browser.active?.immersed != true else { return 0 }
         // Folded, the strip is out of the window and the page has its height.
-        return browser.prefs.sidebar || browser.folded ? 0 : Metrics.strip
+        return browser.prefs.sidebar || browser.folded ? 0 : (appearanceMods.usesEdgeRail ? 50 : Metrics.strip)
     }
 
     /// Put the resting circles in the title bar, exactly over the buttons.

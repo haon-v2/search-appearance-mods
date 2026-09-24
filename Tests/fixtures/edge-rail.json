@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "id": "test.rail",
+  "name": "Test Rail",
+  "author": "Test fixture",
+  "summary": "Fixture for the generic edge-rail renderer.",
+  "tabLayout": "edgeRail",
+  "rail": {
+    "cornerRadius": 80,
+    "tabLength": 210,
+    "gap": 12
+  }
+}

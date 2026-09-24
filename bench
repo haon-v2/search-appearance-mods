@@ -72,7 +72,7 @@ import socket
 import sys
 
 def folder(world):
-    name = f"Search ({world})" if world else "Search"
+    name = f"Search Mod Preview ({world})" if world else "Search Mod Preview"
     return os.path.expanduser(f"~/Library/Application Support/{name}")
 
 def ask(path, request):

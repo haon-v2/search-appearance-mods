@@ -13,6 +13,8 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Added
 
+- Local preview: optional appearance mods in Settings › Appearance. Import, enable, disable, and remove declarative color/layout packages; Packages can configure a generic top/right edge rail. No appearance mods are bundled. Off by default; no executable mod code or new dependencies.
+
 - The site you are on, in a card: click the tab you are on to change its address, and a card comes up under it with whether the connection is private (a step in shows the certificate), Copy Address, Print and the page's zoom. It goes as soon as you type. Right-click a tab › Site Information… opens it too. In the column and in the bar across the top alike, with nothing added to either. The card is from [@kndpt](https://github.com/kndpt)'s address bar ([#56](https://github.com/driceroland/Search/pull/56)), which stayed out: Search has the column or the bar, never a second row over the page.
 - Mute a tab and let it play on: press the speaker at the end of a tab that plays sound, or pick Mute Tab in its right-click menu. A muted tab keeps a crossed-out speaker, to be heard again the same way. Thanks [@merttopuz](https://github.com/merttopuz) ([#61](https://github.com/driceroland/Search/pull/61))
 - File › Share… sends the page where the Mac would send it: Mail, Messages, AirDrop, Notes and the rest, as Safari's Share button does. Thanks [@merttopuz](https://github.com/merttopuz) ([#78](https://github.com/driceroland/Search/pull/78))

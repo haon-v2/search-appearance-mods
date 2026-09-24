@@ -58,7 +58,7 @@ enum Store {
     /// differ from stores made by identifier in how long extension workers
     /// are let live.
     static var ownContainer: Bool {
-        (Bundle.main.bundleIdentifier ?? "") != "com.officecommun.search"
+        (Bundle.main.bundleIdentifier ?? "") != "local.noah.search.mod-preview"
     }
 
     /// The fixed identifiers of a test world's WebKit stores: 1 for websites,
@@ -76,21 +76,11 @@ enum Store {
         return UUID(uuidString: text)!
     }
 
-    /// The app was called Office Browser until September 2026. Everything it
-    /// kept — the session, the pins, the history, what is hidden on each site
-    /// — moves to the new name the first time the new name runs, and the
-    /// settings are copied across. Nothing is left to be lost.
+    /// Preview data stays separate from both Search and Curve.
     static let folder: URL = {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let home = support.appendingPathComponent(world.map { "Search (\($0))" } ?? "Search", isDirectory: true)
-        if !testing {
-            let old = support.appendingPathComponent("Office Browser", isDirectory: true)
-            let files = FileManager.default
-            if !files.fileExists(atPath: home.path), files.fileExists(atPath: old.path) {
-                try? files.moveItem(at: old, to: home)
-            }
-        }
+        let home = support.appendingPathComponent(world.map { "Search Mod Preview (\($0))" } ?? "Search Mod Preview", isDirectory: true)
         return home
     }()
 
@@ -116,26 +106,11 @@ enum Store {
     /// where the tabs go must not change yours.
     static let settings: UserDefaults = {
         guard testing else {
-            carryOver(into: .standard)
+            // Independent Search Mod Preview defaults.
             return .standard
         }
-        let suite = world == "test" ? "com.officecommun.search.test" : "com.officecommun.search.test.\(world ?? "")"
+        let suite = world == "test" ? "local.noah.search.mod-preview.test" : "local.noah.search.mod-preview.test.\(world ?? "")"
         return UserDefaults(suiteName: suite) ?? .standard
     }()
 
-    /// The old bundle's defaults, read once and written under the new one.
-    private static func carryOver(into fresh: UserDefaults) {
-        guard !fresh.bool(forKey: "carried"),
-              let old = UserDefaults(suiteName: "com.driceroland.officebrowser")
-        else { return }
-        for (key, value) in old.dictionaryRepresentation()
-        where fresh.object(forKey: key) == nil && !key.hasPrefix("NS") && !key.hasPrefix("Apple") {
-            fresh.set(value, forKey: key)
-        }
-        // The window comes back where it was, under its new name.
-        if let frame = old.string(forKey: "NSWindow Frame office-browser") {
-            fresh.set(frame, forKey: "NSWindow Frame search")
-        }
-        fresh.set(true, forKey: "carried")
-    }
 }

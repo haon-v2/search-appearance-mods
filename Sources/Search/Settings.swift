@@ -15,11 +15,12 @@ struct SettingsPanel: View {
     @State private var page: Page = Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
 
     enum Page: String, CaseIterable, Identifiable {
-        case general, tabs, extensions, passwords, downloads, privacy, about
+        case general, appearance, tabs, extensions, passwords, downloads, privacy, about
         var id: String { rawValue }
         var title: String {
             switch self {
             case .general: return "General"
+            case .appearance: return "Appearance"
             case .tabs: return "Tabs"
             case .extensions: return "Extensions"
             case .passwords: return "Passwords"
@@ -31,6 +32,7 @@ struct SettingsPanel: View {
         var icon: String {
             switch self {
             case .general: return "macwindow"
+            case .appearance: return "paintpalette"
             case .tabs: return "rectangle.split.3x1"
             case .extensions: return "puzzlepiece.extension"
             case .passwords: return "key"
@@ -132,6 +134,7 @@ struct SettingsPanel: View {
                 VStack(alignment: .leading, spacing: 18) {
                     switch page {
                     case .general: general
+                    case .appearance: AppearanceModsPage(browser: browser)
                     case .tabs: tabs
                     case .extensions: ExtensionsPage(browser: browser)
                     case .passwords: passwords

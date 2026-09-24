@@ -50,6 +50,7 @@ extension Browser {
 /// the strip itself while it is out, brought out by the pointer at the
 /// window's left edge, or its top edge.
 struct Fold: View {
+    @ObservedObject private var appearanceMods = AppearanceMods.shared
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
 
@@ -87,7 +88,7 @@ struct Fold: View {
                     .frame(maxWidth: .infinity)
             }
             if folding, !prefs.sidebar, browser.peeking {
-                TabBar(browser: browser)
+                AppearanceTabChrome(browser: browser, overlay: true)
                     .shadow(color: .black.opacity(0.14), radius: 20, y: 4)
                     .transition(.move(edge: .top))
             }
@@ -167,7 +168,7 @@ struct Fold: View {
         let size = window.frame.size
         let inWindow = point.x >= 0 && point.x < size.width && point.y >= 0 && point.y < size.height
         // Distance from the left edge for the column, from the top for the strip.
-        let distance = prefs.sidebar ? point.x : size.height - point.y
+        let distance = prefs.sidebar ? point.x : (appearanceMods.usesEdgeRail ? min(size.height - point.y, size.width - point.x) : size.height - point.y)
         if browser.peeking {
             pass()
             // Only this window counts, not another app's window over it. One
