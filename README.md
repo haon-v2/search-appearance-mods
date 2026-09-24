@@ -15,7 +15,7 @@ The host keeps Search’s WebKit engine, page lifecycle, and browsing features. 
 
 ## Try the loader
 
-Download **Search-Appearance-Mod-Loader-macOS-arm64.zip** from [Releases](https://github.com/haon-v2/search-appearance-mods/releases). The app is called **Search Mod Preview** and keeps its profile separate from installed Search and Curve. Apple Silicon, macOS 14+. Locally signed, not notarized.
+Download **Search-Appearance-Mod-Loader-macOS-arm64.zip** from [Releases](https://github.com/haon-v2/search-appearance-mods/releases). The app is called **Search Mod Preview**, retains Search’s original app icon, and keeps its profile separate from installed Search and Curve. Apple Silicon, macOS 14+. Locally signed, not notarized.
 
 1. Unzip and move **Search Mod Preview.app** to Applications, keeping its name.
 2. Open it; if macOS blocks this local build, use System Settings → Privacy & Security → Open Anyway for this app.

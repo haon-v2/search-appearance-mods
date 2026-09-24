@@ -35,6 +35,8 @@ in [ROADMAP.md](ROADMAP.md).
 
 ### Fixed
 
+- Community loader preview 0.1.1: explicitly package Search’s original app icon and remove the obsolete Curve icon resource.
+
 - A tab you drag to another place keeps up with the pointer: each move of the hand used to redraw the whole column or bar, the neighbouring spaces' tabs included, and the tab trailed behind. Now only the tab being carried moves until it changes place. Thanks [@e30klip](https://x.com/e30klip) for the report
 - A page gets the shortcuts it uses before Search does, as in Chrome: ⌘K in Slack, ⌘F in a Google Doc, ⌘S in an editor. Search acts only if the page leaves the key unused. The keys that open, close and switch tabs (⌘T, ⌘W, ⌘⇧T, ⌘⇧N, ⌘1–⌘9, ⌘⇧[ and ⌘⇧]) stay Search's, and the menus are unchanged. Thanks [@AbhiPanseriya](https://x.com/AbhiPanseriya) for the report. Refs [#147](https://github.com/driceroland/Search/issues/147)
 - The list under the address field keeps up with a paste or a keystroke: its rows change at once instead of sliding into place on a spring, it comes and goes with a short fade, and the field steps aside quickly once Return is pressed. Thanks [@andupoto](https://x.com/andupoto) for the report
