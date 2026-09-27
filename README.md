@@ -9,9 +9,10 @@ This community fork adds **appearance-mod support by Noah Helms ([@haon-v2](http
 This repository contains the **host/loader**, not a collection of bundled mods. A fresh installation has no mods installed and uses Search’s standard appearance.
 
 - **Loader:** imports, validates, enables, disables, and removes local appearance packages. Includes generic native rendering capabilities and light/dark color roles.
+- **Sidebar modules:** [Curve Tab Folders](https://github.com/haon-v2/curve-tab-folders) ports Curve’s sidebar folders. Requires loader 0.3.0+, installs separately, and can run alongside Curve Tabs.
 - **Mods:** separate JSON packages distributed independently. [Curve Tabs](https://github.com/haon-v2/curve-tabs) is an optional example with its own repository and release. It is not required or bundled with the loader.
 
-The host keeps Search’s WebKit engine, page lifecycle, and browsing features. Mods describe supported appearance settings; they cannot execute scripts or native code or read browsing data. Version 1 supports standard tabs and a configurable top/right edge rail. The edge rail is a generic host renderer; a mod supplies its radius, tab length, spacing, and optional palette. Arbitrary new rendering behavior still requires a host update.
+The host keeps Search’s WebKit engine, page lifecycle, and browsing features. Mods describe supported appearance settings; they cannot execute scripts or native code or read browsing data. API 2 adds an independently enabled, native sidebar-folder capability. API 1 remains compatible and supports standard tabs and a configurable top/right edge rail. The edge rail is a generic host renderer; a mod supplies its radius, tab length, spacing, and optional palette. Arbitrary new rendering behavior still requires a host update.
 
 ## Try the loader
 

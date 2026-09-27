@@ -1,10 +1,10 @@
-# Appearance Mod Loader — experimental API 1
+# Appearance Mod Loader — experimental APIs 1 and 2
 
 Search is by **Drice Roland / Office Commun and its contributors**. Appearance-mod support is contributed by **Noah Helms (@haon-v2)**. This unofficial preview preserves Search’s MIT license and records its integrated stable Search release in `UPSTREAM_VERSION` and its exact commit in `UPSTREAM_COMMIT`.
 
 ## Separate host and packages
 
-The loader ships no mods. Its native rendering capabilities are generic: standard tabs, a configurable top/right edge rail, and light/dark color roles. Mods are separate JSON documents that choose and configure those capabilities. Curve Tabs is maintained separately at https://github.com/haon-v2/curve-tabs and is never installed automatically.
+The loader ships no mods. Its native rendering capabilities are generic: standard tabs, a configurable top/right edge rail, and light/dark color roles. API 2 additionally supports an independent native sidebar-folder capability. Mods are separate JSON documents that choose and configure those capabilities. Curve Tabs is maintained separately at https://github.com/haon-v2/curve-tabs and is never installed automatically.
 
 This is a declarative appearance API, not a loader for arbitrary JavaScript, CSS, Swift binaries, WebExtensions, or Zen Mods. New rendering capabilities require a host update. A mod cannot read sites, passwords, or browsing data, execute code, or download other files.
 
@@ -19,7 +19,7 @@ This is a declarative appearance API, not a loader for arbitrary JavaScript, CSS
 3. Open it. This preview is ad-hoc signed, not notarized. If macOS blocks it, use System Settings → Privacy & Security → Open Anyway for this app.
 4. Download your chosen mod separately. In **Settings → Appearance**, select **Import Mod…**, choose its JSON file, then **Enable**.
 
-Import never enables a package automatically. Disable returns to the standard appearance without closing pages. Remove uninstalls the package. Missing or corrupt selected files fall back to standard rendering. Up to 32 packages may be installed; one is active at a time. With an edge-rail mod enabled, **Show sidebar with curved tabs** in Appearance lets you keep the resizable sidebar beside the rail or use the rail alone. The choice is saved and also follows View → Show Tabs in Sidebar (⇧⌘S). Enabling a mod preserves your current sidebar choice.
+Import never enables a package automatically. Disable returns to the standard appearance without closing pages. Remove uninstalls the package. Missing or corrupt selected files fall back to standard rendering. Up to 32 packages may be installed; one appearance layout and one independent sidebar-folder module can be active at the same time. With an edge-rail mod enabled, **Show sidebar with curved tabs** in Appearance lets you keep the resizable sidebar beside the rail or use the rail alone. The choice is saved and also follows View → Show Tabs in Sidebar (⇧⌘S). Enabling a mod preserves your current sidebar choice.
 
 Your unmodified installed Search cannot import packages until it includes loader support. The preview is the modified host, not an extension installed into Search.app.
 
@@ -89,3 +89,21 @@ The fixture under `Tests/fixtures` is test data only, never bundled or installed
 This is an experimental first release. Alternate-rail accessibility is not yet complete. Search’s inline tab-edit/site-information card and space-switching gestures remain in its standard layout, not the edge rail. Common tab actions and keyboard navigation are supported. The rail observes metadata without creating additional webviews and scrolls with a short-lived timer; these checks do not establish a browser-wide memory ceiling or resolve the previously reported Curve memory incident.
 
 No upstream issue or PR has been submitted. See `UPSTREAM-PROPOSAL.md` for a discussion draft. Preview-specific identity changes should be kept separate from a proposed upstream integration.
+
+## Sidebar folder modules (API 2, loader 0.3.0+)
+
+[Curve Tab Folders](https://github.com/haon-v2/curve-tab-folders) is distributed separately from both this loader and Curve Tabs. Import its JSON package and Enable it in Appearance. Enabling it opens the sidebar without replacing the selected layout.
+
+```json
+{"schemaVersion":2,"id":"example.folders","name":"Tab Folders","author":"Your name","summary":"Sidebar folder organization","tabLayout":"standard","sidebarFolders":true}
+```
+
+API 2 currently accepts only the independent folder capability: `sidebarFolders` must be true, `tabLayout` must be standard, and colors/rail must be absent. API 1 cannot request this capability. Package files are still data-only and cannot execute code. The host stores and manages folder data on the user’s behalf.
+
+The folder-plus menu beside Open Tabs creates, imports, and exports folders. Right-click a tab to move it, or drag it onto a folder header; drop onto Open Tabs to move it out. Folder names are bold, disclosures are on the right, and dotted theme-colored guides appear only on child-tab hover. Remove Folder keeps its tabs open. Private tabs cannot enter saved folders or exports.
+
+Folders belong to the current Search space. Native session entries preserve membership; `tab-folders.json` holds names and collapse states. Disabling/removing the module hides the grouping without deleting it. Use Standard Appearance changes only the layout. With Curve Tabs enabled, the curved rail follows the active tab’s folder.
+
+Imports use the original Curve JSON array of `{name,tabs:[{title,url}]}` records, bounded to 1 MB, 64 folders and 100 tabs. Additional bookmark fields from Curve are ignored. Only HTTP(S) URLs without embedded credentials are accepted, and duplicate URLs inside matching folder names are skipped. Imports restore sleeping tabs without allocating new WebViews. Exports include only folders in the current space, excluding private and test tabs.
+
+`python3 Scripts/test_native.py` now includes folder checks and a real preview restart. Folder source modules: TabFolderStore.swift, TabFolderActions.swift, TabFolderSidebar.swift.

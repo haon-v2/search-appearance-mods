@@ -8,6 +8,6 @@ Original source copyright: **Copyright (c) 2026 Office Commun**. The [MIT licens
 
 ## This contribution
 
-**Noah Helms (@haon-v2)** added the appearance-mod loader, package validation and settings management, generic edge-rail presentation support, and the isolated preview packaging. The separately distributed Curve Tabs package is Noah’s appearance mod for that system.
+**Noah Helms (@haon-v2)** added the appearance-mod loader, package validation and settings management, generic edge-rail presentation support, the native folder capability ported from Noah’s original Curve browser, and the isolated preview packaging. The separately distributed Curve Tabs and Curve Tab Folders packages are Noah’s optional modules for that system.
 
 This is an unofficial community contribution, not an Office Commun release or endorsement. Search’s name and original icon remain Office Commun’s. The preview has its own app identity and data storage.

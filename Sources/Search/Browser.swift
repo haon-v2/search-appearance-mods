@@ -33,6 +33,8 @@ final class Browser: NSObject, ObservableObject {
     /// Everything there is to set. Held here so the whole window redraws when
     /// one of them changes.
     let prefs = Preferences()
+    let tabFolders = TabFolderStore()
+    let folderDragNonce = UUID()
     let linkStatus = LinkStatus()
     /// The settings panel.
     @Published var tuning = false
@@ -702,6 +704,7 @@ final class Browser: NSObject, ObservableObject {
         let url: URL
         let title: String
         let index: Int
+        var folderID: UUID?
 
         var label: String { title.isEmpty ? Address.pretty(url) : title }
     }
@@ -863,6 +866,7 @@ final class Browser: NSObject, ObservableObject {
             prepare(tab)
             tab.restore(url: url, title: entry.title, name: entry.name)
             tab.pin = entry.pin
+            tab.folderID = tabFolders.valid(entry.folderID, in: spaceID)
             tabs.append(tab)
         }
         guard !tabs.isEmpty else {
@@ -963,6 +967,12 @@ final class Browser: NSObject, ObservableObject {
 
         // The window and the menus are drawn from this object; a setting that
         // changes what they show has to be heard here.
+        tabFolders.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &bag)
+        AppearanceMods.shared.objectWillChange
+            .sink { [weak self] in self?.objectWillChange.send() }
+            .store(in: &bag)
         prefs.objectWillChange
             .sink { [weak self] in self?.objectWillChange.send() }
             .store(in: &bag)
@@ -1005,7 +1015,7 @@ final class Browser: NSObject, ObservableObject {
                           url.scheme?.hasPrefix("http") == true
                     else { return nil }
                     return Session.Entry(
-                        url: url.absoluteString, title: tab.title, pin: tab.pin, name: tab.name
+                        url: url.absoluteString, title: tab.title, pin: tab.pin, name: tab.name, folderID: tab.folderID
                     )
                 },
                 active: tabs.firstIndex { $0.id == activeID } ?? 0
@@ -1051,7 +1061,8 @@ final class Browser: NSObject, ObservableObject {
         // its end and is the one opened, with whatever was typed into it and
         // never gone to cleared away — a row of identical empty tabs is what
         // pressing ⌘T twice, or holding it, used to leave.
-        if let blank = tabs.last(where: { $0.isBlank && !$0.bench && !$0.shy }) {
+        let folder = AppearanceMods.shared.usesSidebarFolders ? active?.folderID : nil
+        if let blank = tabs.last(where: { $0.isBlank && !$0.bench && !$0.shy && $0.folderID == folder }) {
             if let end = tabs.indices.last, tabs.firstIndex(where: { $0.id == blank.id }) != end {
                 move(blank, to: end)
             }
@@ -1065,6 +1076,7 @@ final class Browser: NSObject, ObservableObject {
             return
         }
         let tab = Tab()
+        tab.folderID = folder
         adopt(tab)
         leaving()
         activeID = tab.id
@@ -1083,6 +1095,7 @@ final class Browser: NSObject, ObservableObject {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         let url = Browser.page(url)
         let page = Tab(configuration: Browser.extensionConfiguration(for: url))
+        page.folderID = tab.folderID
         prepare(page)
         tabs[index] = page
         page.go(to: url)
@@ -1090,6 +1103,9 @@ final class Browser: NSObject, ObservableObject {
     }
 
     func select(_ tab: Tab) {
+        if AppearanceMods.shared.usesSidebarFolders, let folder = tab.folderID {
+            folderAction { try tabFolders.collapse(folder, false) }
+        }
         // A peek is over the tab it was opened from; another tab puts it away.
         if peekTab != nil, tab.id != activeID { closePeek() }
         cancelTabEdit()
@@ -1211,6 +1227,7 @@ final class Browser: NSObject, ObservableObject {
     func reopen(_ ghost: Ghost) {
         ghosts.removeAll { $0.id == ghost.id }
         let tab = Tab()
+        tab.folderID = tabFolders.valid(ghost.folderID, in: spaceID)
         prepare(tab)
         leaving()
         tabs.insert(tab, at: min(ghost.index, tabs.count))
@@ -1222,7 +1239,7 @@ final class Browser: NSObject, ObservableObject {
 
     private func remember(_ tab: Tab, at index: Int) {
         guard !tab.shy, let url = tab.address else { return }
-        ghosts.append(Ghost(url: url, title: tab.title, index: index))
+        ghosts.append(Ghost(url: url, title: tab.title, index: index, folderID: tab.folderID))
         if ghosts.count > 12 { ghosts.removeFirst() }
     }
 
@@ -1268,6 +1285,9 @@ final class Browser: NSObject, ObservableObject {
         } else {
             Tab(configuration: page)
         }
+        if !tab.shy, AppearanceMods.shared.usesSidebarFolders {
+            tab.folderID = tabFolders.valid((source ?? active)?.folderID, in: spaceID)
+        }
         prepare(tab)
         let here = atEnd ? nil : tabs.firstIndex { $0.id == activeID }
         tabs.insert(tab, at: here.map { $0 + 1 } ?? tabs.count)
@@ -1300,6 +1320,7 @@ final class Browser: NSObject, ObservableObject {
         } else {
             Tab(bench: tab.bench, configuration: page)
         }
+        fresh.folderID = tab.folderID
         prepare(fresh)
         let wasActive = activeID == tab.id
         tabs[index] = fresh
@@ -1449,6 +1470,7 @@ final class Browser: NSObject, ObservableObject {
             prepare(tab)
             tab.restore(url: url, title: entry.title, name: entry.name)
             tab.pin = entry.pin
+            tab.folderID = tabFolders.valid(entry.folderID, in: space)
             row.append(tab)
         }
         let active = row.indices.contains(saved.active) ? row[saved.active].id : row.first?.id

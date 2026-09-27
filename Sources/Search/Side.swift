@@ -254,6 +254,7 @@ struct SideBar: View {
     /// from what was drawn rather than measured: a measurement would arrive a
     /// frame late, and for one frame the whole column would drag the window.
     private var rowsEnd: CGFloat {
+        if AppearanceMods.shared.usesSidebarFolders { return .greatestFiniteMagnitude }
         let pins = browser.pinnedCount
         let cols = SideBar.pinColumns(pins)
         let pinRows = pins == 0 ? 0 : (pins + cols - 1) / cols
@@ -421,7 +422,9 @@ struct SideBar: View {
     /// The loose tabs and the row that makes another, which scroll as one.
     private var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
-            loose
+            if AppearanceMods.shared.usesSidebarFolders {
+                FolderSidebarRows(browser: browser, prefs: prefs, folders: browser.tabFolders, pill: pill)
+            } else { loose }
             newTab
         }
     }
@@ -541,7 +544,7 @@ private struct PinSquare: View {
 }
 
 /// One tab, as a line in the column.
-private struct SideRow: View {
+struct SideRow: View {
     @ObservedObject var browser: Browser
     @ObservedObject var prefs: Preferences
     @ObservedObject var tab: Tab

@@ -277,6 +277,39 @@ final class Bench {
         let verb = request["do"] as? String ?? ""
 
         switch verb {
+        case "tabFolders":
+            guard Store.testing else { answer(["error": "Folder tests require an isolated profile."]); return }
+            do {
+                let id = (request["folder"] as? String).flatMap(UUID.init(uuidString:))
+                if let name = request["create"] as? String { _ = try browser.tabFolders.create(name, in: browser.spaceID) }
+                if let id, let name = request["rename"] as? String { try browser.tabFolders.rename(id, to: name) }
+                if let id, let collapsed = request["collapsed"] as? Bool { try browser.tabFolders.collapse(id, collapsed) }
+                if let id, request["delete"] as? Bool == true { try browser.removeFolder(id) }
+                if let text = request["importJSON"] as? String { _ = try browser.importFolders(Data(text.utf8)) }
+                if let tabID = (request["move"] as? String).flatMap(UUID.init(uuidString:)),
+                   let tab = browser.tabs.first(where: { $0.id == tabID }) { try browser.moveToFolder(tab, id) }
+                else if request["move"] != nil { throw ModError.invalid("Tab not in this space") }
+                if let text = request["drop"] as? String { try browser.receiveFolderDrop(text, folderID: id) }
+                if request["newTab"] as? Bool == true { if let id { browser.newTab(inFolder: id) } else { browser.newTab() } }
+                if request["privateTab"] as? Bool == true { browser.newShyTab() }
+                if request["duplicate"] as? Bool == true { browser.duplicate() }
+                if request["reopen"] as? Bool == true { browser.reopen() }
+                if let closed = (request["close"] as? String).flatMap(UUID.init(uuidString:)),
+                   let tab = browser.tabs.first(where: { $0.id == closed }) { browser.close(tab) }
+                browser.flushSession()
+                let restored = TabFolderStore()
+                answer([
+                    "enabled": AppearanceMods.shared.usesSidebarFolders,
+                    "nonce": browser.folderDragNonce.uuidString,
+                    "folders": browser.tabFolders.folders(in: browser.spaceID).map { ["id":$0.id.uuidString, "name":$0.name, "collapsed":$0.collapsed] as [String:Any] },
+                    "savedFolders": restored.folders(in: browser.spaceID).count,
+                    "tabs": browser.tabs.map { ["id":$0.id.uuidString, "folder":$0.folderID?.uuidString ?? "", "url":($0.pending ?? $0.address)?.absoluteString ?? "", "built":$0.built != nil, "private":$0.shy] as [String:Any] },
+                    "railTabs": browser.folderTabs.map { $0.id.uuidString },
+                    "exportJSON": String(data: try browser.exportFolders(), encoding:.utf8) ?? "",
+                    "savedTabs": Session.read(space:browser.spaceID).tabs.map { ["url":$0.url, "folder":$0.folderID?.uuidString ?? ""] }
+                ])
+            } catch { answer(["error":error.localizedDescription]) }
+
         case "appearance":
             guard Store.testing else { answer(["error": "Appearance test commands require an isolated test run."]); return }
             if let on = request["bookmarksBar"] as? Bool {
@@ -295,6 +328,7 @@ final class Bench {
                 if let path = request["install"] as? String { try mods.install(URL(fileURLWithPath: path)) }
                 if let id = request["enable"] as? String { mods.select(id.isEmpty ? nil : id) }
                 if let id = request["remove"] as? String { try mods.remove(id) }
+                if let id = request["disable"] as? String { mods.disable(id) }
                 if request["reload"] as? Bool == true { mods.reload() }
                 func rail(in view: NSView) -> EdgeRailView? {
                     if let rail = view as? EdgeRailView { return rail }

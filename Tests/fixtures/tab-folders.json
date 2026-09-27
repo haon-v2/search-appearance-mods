@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 2,
+  "id": "curve.tab-folders",
+  "name": "Curve Tab Folders",
+  "author": "Noah Helms",
+  "summary": "Curve’s sidebar folders for Search: drag tabs into groups, collapse, rename, and import or export folders. Works independently of Curve Tabs.",
+  "tabLayout": "standard",
+  "sidebarFolders": true
+}

@@ -757,6 +757,7 @@ struct TabMenu: View {
             Button("Unpin") { browser.unpin(tab) }
         }
         Divider()
+        FolderTabMenu(browser: browser, tab: tab)
         Button("Rename") { browser.beginTabRename(tab) }
         Button("Duplicate") {
             browser.select(tab)

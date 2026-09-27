@@ -11,6 +11,7 @@ enum Session {
         var pin: String?
         /// The name you gave the tab, when you gave it one.
         var name: String?
+        var folderID: UUID?
     }
 
     struct Shape: Codable {

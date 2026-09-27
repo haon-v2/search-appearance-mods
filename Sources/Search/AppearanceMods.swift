@@ -23,7 +23,7 @@ struct AppearanceModsPage: View {
     VStack(alignment: .leading, spacing: 16) {
       Text("Appearance mods").font(.headline)
       Text(
-        "Local layouts and colors for the browser. They cannot read websites, browsing data, or passwords, and contain no executable code."
+        "Local layouts and optional built-in sidebar features. Mod files contain no executable code and cannot access websites or passwords. Folder data stays on this Mac."
       ).font(.system(size: 12)).foregroundStyle(Palette.muted)
       HStack {
         Button("Import Mod…") { mods.chooseFile(in: Links.window) }
@@ -35,11 +35,12 @@ struct AppearanceModsPage: View {
           HStack {
             Text(mod.name).fontWeight(.medium)
             Spacer()
-            Button(mods.selectedID == mod.id ? "Disable" : "Enable") {
-              if mods.selectedID == mod.id {
-                mods.select(nil)
+            Button(mods.isEnabled(mod.id) ? "Disable" : "Enable") {
+              if mods.isEnabled(mod.id) {
+                mods.disable(mod.id)
               } else {
                 mods.select(mod.id)
+                if mod.isFolderModule { browser.prefs.sidebar = true }
                 if mod.tabLayout == .edgeRail {
                   browser.folded = false
                   browser.peeking = false
@@ -73,7 +74,7 @@ struct AppearanceModsPage: View {
       Text(mods.notice).font(.system(size: 12)).foregroundStyle(Palette.muted).accessibilityLabel(
         mods.notice)
       Text(
-        "Version 1 supports standard tabs and configurable edge rails, plus light/dark color pairs. New layout types require an update to the host app. These are not WebExtensions or Zen Mods."
+        "Version 1 supports layouts and colors. Version 2 adds independent sidebar-folder modules, which can run alongside a layout mod. New layout types require an update to the host app. These are not WebExtensions or Zen Mods."
       ).font(.system(size: 11)).foregroundStyle(Palette.muted)
     }.foregroundStyle(Palette.ink)
   }

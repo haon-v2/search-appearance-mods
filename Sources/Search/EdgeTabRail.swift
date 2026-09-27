@@ -137,18 +137,18 @@ final class EdgeRailView: NSView {
       width: bounds.width, height: bounds.height, leading: min(leading, bounds.width - 130),
       radius: configuration?.cornerRadius ?? 64)
   }
-  var total: Double { Double(browser?.tabs.count ?? 0) * pitch + 40 }
+  var total: Double { Double(browser?.folderTabs.count ?? 0) * pitch + 40 }
   var maximum: Double { max(0, total - geometry.length) }
   override var isFlipped: Bool { true }
   override var acceptsFirstResponder: Bool { true }
   func bind(_ browser: Browser, leading: Double) {
     self.browser = browser
     self.leading = leading
-    let next = browser.tabs.map(\.id)
+    let next = browser.folderTabs.map(\.id)
     if next != ids {
       ids = next
       // Only observe metadata. Never read tab.web while drawing the rail.
-      subscriptions = browser.tabs.map { tab in
+      subscriptions = browser.folderTabs.map { tab in
         tab.objectWillChange.sink { [weak self] _ in
           DispatchQueue.main.async { self?.needsDisplay = true }
         }
@@ -208,7 +208,7 @@ final class EdgeRailView: NSView {
   }
   override func draw(_ dirtyRect: NSRect) {
     guard let browser else { return }
-    for (index, tab) in browser.tabs.enumerated() {
+    for (index, tab) in browser.folderTabs.enumerated() {
       let start = Double(index) * pitch - offset
       let end = start + tabLength
       guard end > 16, start < geometry.length - 16 else { continue }
@@ -236,7 +236,7 @@ final class EdgeRailView: NSView {
         cross.stroke()
       }
     }
-    let d = Double(browser.tabs.count) * pitch + 12 - offset
+    let d = Double(browser.folderTabs.count) * pitch + 12 - offset
     if d >= 0 && d <= geometry.length {
       let p = geometry.point(d)
       Palette.NS.wash.setFill()
@@ -318,7 +318,7 @@ final class EdgeRailView: NSView {
   }
 
   func reveal() {
-    guard let browser, let i = browser.tabs.firstIndex(where: { $0.id == browser.activeID }) else {
+    guard let browser, let i = browser.folderTabs.firstIndex(where: { $0.id == browser.activeID }) else {
       return
     }
     let start = Double(i) * pitch
@@ -364,16 +364,16 @@ final class EdgeRailView: NSView {
     let hit = geometry.nearest(convert(event.locationInWindow, from: nil))
     let d = hit.distance + offset
     let i = Int(d / pitch)
-    guard hit.error <= 20, let browser, browser.tabs.indices.contains(i),
+    guard hit.error <= 20, let browser, browser.folderTabs.indices.contains(i),
       d - Double(i) * pitch <= tabLength
     else { return nil }
-    return (browser.tabs[i], d - Double(i) * pitch)
+    return (browser.folderTabs[i], d - Double(i) * pitch)
   }
   override func mouseDown(with event: NSEvent) {
     guard let browser else { return }
     let p = convert(event.locationInWindow, from: nil)
     let hit = geometry.nearest(p)
-    let plus = Double(browser.tabs.count) * pitch + 12 - offset
+    let plus = Double(browser.folderTabs.count) * pitch + 12 - offset
     if abs(hit.distance - plus) < 16 && hit.error < 18 {
       browser.newTab()
       return
@@ -390,7 +390,7 @@ final class EdgeRailView: NSView {
     if event.clickCount == 2 { browser.edit() }
   }
   override func mouseDragged(with event: NSEvent) {
-    guard let browser, let id = dragged, let tab = browser.tabs.first(where: { $0.id == id }) else {
+    guard let browser, let id = dragged, let tab = browser.folderTabs.first(where: { $0.id == id }) else {
       return
     }
     let p = convert(event.locationInWindow, from: nil)
@@ -399,8 +399,10 @@ final class EdgeRailView: NSView {
     let near = geometry.nearest(p)
     if near.distance < 25 { setOffset(targetOffset - 14, animated: false) }
     if near.distance > geometry.length - 25 { setOffset(targetOffset + 14, animated: false) }
-    browser.move(
-      tab, to: min(browser.tabs.count - 1, max(0, Int((near.distance + offset) / pitch))))
+    let index = min(browser.folderTabs.count - 1, max(0, Int((near.distance + offset) / pitch)))
+    if let destination = browser.tabs.firstIndex(where: { $0.id == browser.folderTabs[index].id }) {
+      browser.move(tab, to: destination)
+    }
   }
   override func mouseUp(with event: NSEvent) {
     dragged = nil
@@ -411,7 +413,7 @@ final class EdgeRailView: NSView {
   }
   override func mouseMoved(with event: NSEvent) {
     hover = target(event).flatMap { target in
-      browser?.tabs.firstIndex(where: { $0.id == target.0.id })
+      browser?.folderTabs.firstIndex(where: { $0.id == target.0.id })
     }
     needsDisplay = true
   }
@@ -445,16 +447,33 @@ final class EdgeRailView: NSView {
         item.isEnabled = !tab.isBlank
       }
       if action == "reopen" { item.isEnabled = !browser.ghosts.isEmpty }
-      if action == "others" { item.isEnabled = browser.tabs.count > 1 }
+      if action == "others" { item.isEnabled = browser.folderTabs.count > 1 }
       menu.addItem(item)
+    }
+    if AppearanceMods.shared.usesSidebarFolders, tab.pin == nil, !tab.shy {
+      let root = NSMenuItem(title: "Move to Folder", action: nil, keyEquivalent: "")
+      let sub = NSMenu()
+      var destinations: [(String, String)] = [("Open Tabs", "")]
+      destinations += browser.tabFolders.folders(in: browser.spaceID).map { ($0.name, $0.id.uuidString) }
+      destinations.append(("New Folder…", "new"))
+      for (name, id) in destinations {
+        let item = NSMenuItem(title: name, action: #selector(performMenu(_:)), keyEquivalent: "")
+        item.target = self
+        item.representedObject = ["id": tab.id.uuidString, "action": "folder", "folder": id]
+        sub.addItem(item)
+      }
+      root.submenu = sub; menu.insertItem(root, at: 0)
     }
     return menu
   }
   @objc private func performMenu(_ sender: NSMenuItem) {
     guard let info = sender.representedObject as? [String: String], let browser,
-      let tab = browser.tabs.first(where: { $0.id.uuidString == info["id"] })
+      let tab = browser.folderTabs.first(where: { $0.id.uuidString == info["id"] })
     else { return }
     switch info["action"] {
+    case "folder":
+      if info["folder"] == "new" { browser.editFolder(moving: tab) }
+      else { browser.folderAction { try browser.moveToFolder(tab, info["folder"].flatMap(UUID.init(uuidString:))) } }
     case "rename":
       guard let window else { return }
       let alert = NSAlert()

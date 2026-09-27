@@ -23,6 +23,8 @@ struct AppearanceMod: Codable, Equatable, Identifiable {
   let tabLayout: Layout
   let colors: Colors?
   let rail: Rail?
+  let sidebarFolders: Bool?
+  var isFolderModule: Bool { sidebarFolders == true }
   static let maximumBytes = 65_536
   static let roles: Set<String> = ["ground", "ink", "muted", "faint", "hairline", "wash", "hover"]
   static func decode(_ data: Data) throws -> Self {
@@ -31,13 +33,15 @@ struct AppearanceMod: Codable, Equatable, Identifiable {
     }
     guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
       Set(json.keys).isSubset(of: [
-        "schemaVersion", "id", "name", "author", "summary", "tabLayout", "colors", "rail",
+        "schemaVersion", "id", "name", "author", "summary", "tabLayout", "colors", "rail", "sidebarFolders",
       ])
     else {
       throw ModError.invalid("Unknown mod fields. Only appearance settings are supported.")
     }
     let mod = try JSONDecoder().decode(Self.self, from: data)
-    guard mod.schemaVersion == 1 else {
+    guard (mod.schemaVersion == 1 && json["sidebarFolders"] == nil)
+      || (mod.schemaVersion == 2 && mod.isFolderModule && mod.tabLayout == .standard
+          && mod.colors == nil && mod.rail == nil) else {
       throw ModError.invalid("This mod requires a different appearance API version.")
     }
     guard mod.id.range(of: "^[a-z][a-z0-9.-]{0,63}$", options: .regularExpression) != nil,
@@ -107,6 +111,16 @@ enum AppearanceColors {
   static let shared = AppearanceMods()
   @Published private(set) var installed: [AppearanceMod] = []
   @Published private(set) var selectedID: String?
+  @Published private(set) var folderModID: String?
+  var usesSidebarFolders: Bool { installed.contains { $0.id == folderModID && $0.isFolderModule } }
+  func isEnabled(_ id: String) -> Bool { selectedID == id || folderModID == id }
+  func disable(_ id: String) {
+    if folderModID == id {
+      folderModID = nil
+      defaults.removeObject(forKey: "appearance.sidebarFolders")
+      notice = "Tab folders are hidden. Your folders and tabs remain saved."
+    } else if selectedID == id { select(nil) }
+  }
   @Published var notice =
     "Import a local appearance mod. Mods can change supported layouts and colors only."
   private let folder: URL
@@ -117,6 +131,7 @@ enum AppearanceColors {
     self.folder = folder
     self.defaults = defaults
     selectedID = defaults.string(forKey: "appearance.mod")
+    folderModID = defaults.string(forKey: "appearance.sidebarFolders")
     reload()
   }
   static func read(_ url: URL) throws -> Data {
@@ -143,6 +158,10 @@ enum AppearanceColors {
       }
     }
     installed = loaded
+    if !usesSidebarFolders {
+      folderModID = nil
+      defaults.removeObject(forKey: "appearance.sidebarFolders")
+    }
     if selectedID != nil && active == nil {
       selectedID = nil
       defaults.removeObject(forKey: "appearance.mod")
@@ -176,6 +195,12 @@ enum AppearanceColors {
   }
   func select(_ id: String?) {
     guard id == nil || installed.contains(where: { $0.id == id }) else { return }
+    if let id, installed.first(where: { $0.id == id })?.isFolderModule == true {
+      folderModID = id
+      defaults.set(id, forKey: "appearance.sidebarFolders")
+      notice = "Tab folders enabled. Your appearance layout is unchanged."
+      return
+    }
     selectedID = id
     if let id {
       defaults.set(id, forKey: "appearance.mod")
@@ -192,7 +217,7 @@ enum AppearanceColors {
   func remove(_ id: String) throws {
     guard installed.contains(where: { $0.id == id }) else { return }
     try FileManager.default.removeItem(at: folder.appendingPathComponent(id + ".json"))
-    if selectedID == id { select(nil) }
+    disable(id)
     reload()
     notice = "Appearance mod removed."
   }

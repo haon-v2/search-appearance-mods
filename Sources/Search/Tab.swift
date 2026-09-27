@@ -357,6 +357,7 @@ final class Tab: ObservableObject, Identifiable {
     /// One letter, when the tab has been pinned. A pinned tab keeps its place
     /// at the head of the row and gives up its title for that letter — which
     /// is all you need for the five or six pages you keep open all day.
+    @Published var folderID: UUID?
     @Published var pin: String?
 
     /// A name you gave it, in place of whatever the page calls itself. It
