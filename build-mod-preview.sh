@@ -5,6 +5,8 @@ swift build -c release
 APP="$PWD/build/Search Mod Preview.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/Search "$APP/Contents/MacOS/SearchModPreview"
+swiftc -O -parse-as-library -target arm64-apple-macos14.0 Sources/Search/LoaderRelease.swift Sources/Search/LoaderInstallCore.swift Tools/LoaderInstallHelper.swift -o "$APP/Contents/MacOS/LoaderInstallHelper"
+codesign --force --sign - "$APP/Contents/MacOS/LoaderInstallHelper"
 rm -f "$APP/Contents/Resources/Curve.icns"
 # Keep Search’s original artwork; mods do not replace the host app icon.
 ICONSET="$PWD/build/SearchModPreview.iconset"

@@ -33,7 +33,7 @@ For curved tabs, **Show sidebar with curved tabs** in Appearance optionally keep
 
 ## Updates
 
-**0.1.x needs a one-time manual upgrade** to 0.2.0 or newer: those older builds did not have a preview updater. From 0.2.0, **Settings → About** checks compatible loader releases daily and offers a download when one is available. Quit and replace **Search Mod Preview.app** with the new copy to keep your preview profile and installed mods. Installation is manual; these builds are not signed with Office Commun’s identity.
+**Install 0.4.0 manually once if you are on 0.3.x or older.** From 0.4.0, **Settings → About → Download and Restart** downloads a signed, verified loader update, quits normally, replaces only the preview app, and reopens your saved session. Your preview profile and installed mods remain in place. Save unfinished forms before restarting. Checks run daily; updates only install when you click. A writable Applications folder is required; official Search.app is never replaced.
 
 A GitHub workflow checks for stable Search releases every six hours, attempts integration, builds the app and runs package, update-feed and native UI tests before publishing a compatible preview. Source conflicts or failed tests stop publication. This keeps updates moving without promising that all future Search changes will work unchanged. [Update policy and installation instructions](docs/UPDATING.md).
 

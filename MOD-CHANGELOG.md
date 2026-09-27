@@ -2,6 +2,14 @@
 
 Search itself is by Drice Roland / Office Commun and its contributors. Its unchanged changelog is in CHANGELOG.md.
 
+## 0.4.0
+
+- Add Download and Restart for compatible preview updates, with progress and cancellation while downloading.
+- Authenticate manifests with a pinned Ed25519 key; verify archives and app identity/code integrity before replacement. Sign release manifests in the isolated publication job.
+- Wait for a normal quit, preserve the preview profile and mods, retain the old app for rollback, and reopen the updated app. Refuse read-only/translocated targets and downgrades.
+- Route the Search menu’s update action to the preview updater.
+- Older previews require one manual installation of 0.4.0 to gain in-app installation.
+
 ## 0.3.1
 
 - Integrate Search v1.0.4, including multiple windows, native tab groups, right-side sidebar, shortcuts, import improvements, and upstream security fixes.

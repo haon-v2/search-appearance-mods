@@ -66,6 +66,7 @@ struct SettingsPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .shadow(color: .black.opacity(0.16), radius: 34, y: 12)
         .onChange(of: page) { _, page in Store.settings.set(page.rawValue, forKey: "settings.page") }
+        .onReceive(NotificationCenter.default.publisher(for: LoaderUpdater.showPanel)) { _ in page = .about }
     }
 
     // MARK: - the rail

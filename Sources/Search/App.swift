@@ -1288,9 +1288,12 @@ struct ContentView: View {
 /// Its own view, so only the updater's changes redraw it (see SearchApp.body).
 private struct UpdateMenuItem: View {
     @ObservedObject private var updater = Updater.shared
+    @ObservedObject private var loader = LoaderUpdater.shared
 
     var body: some View {
-        if case .ready = updater.stage {
+        if LoaderUpdater.isPreview {
+            Button("Check for Updates…") { loader.openPanel() }.disabled(loader.busy)
+        } else if case .ready = updater.stage {
             Button("Restart to Update") { updater.relaunch() }
         } else {
             Button("Check for Updates…") { updater.checkByHand() }

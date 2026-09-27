@@ -39,6 +39,7 @@ jobs:
         run: |
           python3 Tests/run_appearance_tests.py
           python3 Tests/run_loader_update_tests.py
+          python3 Tests/run_loader_install_tests.py
       - name: Exercise the actual app in an isolated profile
         if: steps.sync.outputs.publish == 'true' || github.event_name != 'schedule'
         run: python3 Scripts/test_native.py
@@ -81,6 +82,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.check.outputs.tag }}
+          LOADER_UPDATE_SIGNING_KEY: ${{ secrets.LOADER_UPDATE_SIGNING_KEY }}
         run: |
           set -euo pipefail
           [[ "$TAG" =~ ^appearance-mods-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -91,11 +93,25 @@ jobs:
           git push origin "$candidate:refs/heads/codex/appearance-mod-loader"
           dir="checked/releases/$TAG"
           (cd "$dir" && sha256sum -c SHA256SUMS.txt)
+          # Sign only in this isolated publication job, never alongside merged browser code.
+          # This inline signer is reviewed with the workflow; no artifact code is executed.
+          keyfile=$(mktemp)
+          chmod 600 "$keyfile"
+          trap 'rm -f "$keyfile"' EXIT
+          printf '%s\n' "$LOADER_UPDATE_SIGNING_KEY" > "$keyfile"
+          openssl pkeyutl -sign -rawin -inkey "$keyfile" -in "$dir/loader-update.json" -out "$dir/loader-update.sig"
+          openssl pkey -in "$keyfile" -pubout -outform DER -out "$dir/signing-public.der"
+          python3 - "$dir/signing-public.der" LOADER_UPDATE_PUBLIC_KEY <<'PYVERIFY'
+          import base64,sys
+          from pathlib import Path
+          assert Path(sys.argv[1]).read_bytes() == bytes.fromhex('302a300506032b6570032100') + base64.b64decode(Path(sys.argv[2]).read_text().strip())
+          PYVERIFY
+          (cd "$dir" && sha256sum loader-update.sig >> SHA256SUMS.txt)
           if gh release view "$TAG" --json isDraft > release-state.json 2>/dev/null; then
             # A rerun may resume a draft, but must never overwrite a public build.
             [[ "$(jq -r .isDraft release-state.json)" == true ]] || exit 0
           else
             gh release create "$TAG" --target "$candidate" --draft --prerelease --title "Appearance Mod Loader ${TAG#appearance-mods-v} Preview" --notes-file "$dir/release-notes.md"
           fi
-          gh release upload "$TAG" --clobber "$dir/Search-Appearance-Mod-Loader-macOS-arm64.zip" "$dir/Search-Appearance-Mod-Loader-Source.tar.gz" "$dir/SHA256SUMS.txt" "$dir/loader-update.json"
+          gh release upload "$TAG" --clobber "$dir/Search-Appearance-Mod-Loader-macOS-arm64.zip" "$dir/Search-Appearance-Mod-Loader-Source.tar.gz" "$dir/SHA256SUMS.txt" "$dir/loader-update.json" "$dir/loader-update.sig"
           gh release edit "$TAG" --draft=false
