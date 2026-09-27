@@ -26,7 +26,7 @@ Download **Search-Appearance-Mod-Loader-macOS-arm64.zip** from [Releases](https:
 3. Download a mod separately.
 4. Open **Settings → Appearance → Import Mod…**, choose the mod’s JSON file, then **Enable**.
 
-Disable or remove mods in the same page. Installing the loader alone changes no tab layout. An unmodified official Search app cannot load these packages yet.
+For curved tabs, **Show sidebar with curved tabs** in Appearance optionally keeps Search’s resizable sidebar open alongside the rail. Disable or remove mods in the same page. Installing the loader alone changes no tab layout. An unmodified official Search app cannot load these packages yet.
 
 [Full installation and API guide](docs/APPEARANCE-MODS.md) · [Credits](CREDITS.md) · [Original Search README](README-UPSTREAM.md)
 

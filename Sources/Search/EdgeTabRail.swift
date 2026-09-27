@@ -74,28 +74,31 @@ struct EdgeRailChrome: View {
         }
       }
       DragStrip().frame(height: Metrics.strip)
-      EdgeRail(browser: browser, leading: leading, configuration: configuration)
-      HStack(spacing: 3) {
-        Helm(browser: browser)
-        Door(icon: "magnifyingglass", help: "Search or enter address · ⌘L") { browser.edit() }
-        ExtensionSlot()
-        Door(icon: "bookmark", help: "Bookmarks") { browser.bookmarksOpen.toggle() }
-          .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .bottom) {
-            BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
-          }
-        Door(icon: "gearshape", help: "Settings") { browser.tuning = true }
-      }
-      .fixedSize()
-      .background(
-        GeometryReader { g in
-          Color.clear.onAppear { leading = g.size.width + Metrics.lights + 16 }.onChange(
-            of: g.size.width
-          ) { _, w in leading = w + Metrics.lights + 16 }
+      EdgeRail(browser: browser, leading: browser.prefs.sidebar ? 16 : leading, configuration: configuration)
+      if !browser.prefs.sidebar {
+        HStack(spacing: 3) {
+          Helm(browser: browser)
+          Door(icon: "magnifyingglass", help: "Search or enter address · ⌘L") { browser.edit() }
+          ExtensionSlot()
+          Door(icon: "bookmark", help: "Bookmarks") { browser.bookmarksOpen.toggle() }
+            .popover(isPresented: $browser.bookmarksOpen, arrowEdge: .bottom) {
+              BookmarksDropdown(browser: browser, bookmarks: browser.bookmarks)
+            }
+          Door(icon: "gearshape", help: "Settings") { browser.tuning = true }
         }
-      )
-      .frame(height: Metrics.strip)
-      .padding(.leading, Metrics.lights)
+        .fixedSize()
+        .background(
+          GeometryReader { g in
+            Color.clear.onAppear { leading = g.size.width + Metrics.lights + 16 }.onChange(
+              of: g.size.width
+            ) { _, w in leading = w + Metrics.lights + 16 }
+          }
+        )
+        .frame(height: Metrics.strip)
+        .padding(.leading, Metrics.lights)
+      }
     }
+    .padding(.leading, browser.prefs.sidebar ? browser.prefs.sideWidth : 0)
     .onDrop(of: [.url, .text], isTargeted: nil) { browser.take($0) }
   }
 }

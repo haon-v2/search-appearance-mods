@@ -2,6 +2,12 @@
 
 Search itself is by Drice Roland / Office Commun and its contributors. Its unchanged changelog is in CHANGELOG.md.
 
+## 0.2.1
+
+- Optional “Show sidebar with curved tabs” switch in Appearance settings. Enabling a rail mod preserves the existing sidebar choice.
+- Keep the resizable sidebar and curved rail visible together; page and search-field spacing account for both. Navigation buttons stay in the sidebar in this layout.
+- Folding hides both and reveals them from the left, top or right edge. The same tabs and page instances remain shared between layouts.
+
 ## 0.2.0
 
 - Merge Search v1.0.3, including upstream security fixes and bookmarks bar.

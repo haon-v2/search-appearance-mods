@@ -285,6 +285,9 @@ final class Bench {
                 }
                 browser.prefs.bookmarksBar = on
             }
+            if let width = request["sidebarWidth"] as? Double {
+                browser.prefs.sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, width))
+            }
             let mods = AppearanceMods.shared
             if let page = request["settingsPage"] as? String, SettingsPanel.Page(rawValue: page) != nil { Store.settings.set(page, forKey: "settings.page") }
             let views = Dictionary(uniqueKeysWithValues: browser.tabs.compactMap { tab in tab.built.map { (tab.id.uuidString, String(describing: ObjectIdentifier($0))) } })
@@ -311,7 +314,7 @@ final class Bench {
                             }
                         }
                     }
-                    answer(["enabled":mods.selectedID ?? "", "installed":mods.installed.map(\.id), "rail":true, "width":view.bounds.width, "height":view.bounds.height, "leading":view.leading, "length":view.geometry.length, "straight":view.geometry.straight, "offset":view.offset, "maximum":view.maximum, "tabs":browser.tabs.map(describe), "built":browser.tabs.filter{$0.built != nil}.count, "views":views])
+                    answer(["enabled":mods.selectedID ?? "", "installed":mods.installed.map(\.id), "rail":true, "width":view.bounds.width, "height":view.bounds.height, "sidebar":browser.prefs.sidebar, "sidebarWidth":browser.prefs.sideWidth, "railX":view.convert(view.bounds, to:nil).minX, "leading":view.leading, "length":view.geometry.length, "straight":view.geometry.straight, "offset":view.offset, "maximum":view.maximum, "tabs":browser.tabs.map(describe), "built":browser.tabs.filter{$0.built != nil}.count, "views":views])
                 } else { answer(["enabled":mods.selectedID ?? "", "installed":mods.installed.map(\.id), "rail":false, "built":browser.tabs.filter{$0.built != nil}.count, "views":views]) }
             } catch { answer(["error":error.localizedDescription]) }
 

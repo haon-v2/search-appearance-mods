@@ -19,7 +19,7 @@ This is a declarative appearance API, not a loader for arbitrary JavaScript, CSS
 3. Open it. This preview is ad-hoc signed, not notarized. If macOS blocks it, use System Settings → Privacy & Security → Open Anyway for this app.
 4. Download your chosen mod separately. In **Settings → Appearance**, select **Import Mod…**, choose its JSON file, then **Enable**.
 
-Import never enables a package automatically. Disable returns to the standard appearance without closing pages. Remove uninstalls the package. Missing or corrupt selected files fall back to standard rendering. Up to 32 packages may be installed; one is active at a time. A layout mod may select horizontal tabs; the sidebar remains available through Search’s controls.
+Import never enables a package automatically. Disable returns to the standard appearance without closing pages. Remove uninstalls the package. Missing or corrupt selected files fall back to standard rendering. Up to 32 packages may be installed; one is active at a time. With an edge-rail mod enabled, **Show sidebar with curved tabs** in Appearance lets you keep the resizable sidebar beside the rail or use the rail alone. The choice is saved and also follows View → Show Tabs in Sidebar (⇧⌘S). Enabling a mod preserves your current sidebar choice.
 
 Your unmodified installed Search cannot import packages until it includes loader support. The preview is the modified host, not an extension installed into Search.app.
 

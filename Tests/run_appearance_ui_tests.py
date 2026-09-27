@@ -64,6 +64,43 @@ try:
     for width,height in [(640,480),(1440,900),(1180,780)]:
         ask(do='resize',width=width,height=height,steps=1);time.sleep(.2)
         state=ask(do='appearance');assert state['width']==width and 0<=state['offset']<=state['maximum']
+    # Curve Tabs can coexist with the resizable sidebar; the same pages survive.
+    ask(do='select',id=ids[0]);ask(do='ui',sidebar=True,hides=False,folded=False)
+    time.sleep(.6)
+    side_views=ask(do='appearance')['views']
+    for width,height,side in [(1180,780,176),(1180,780,300),(1180,780,440),(640,480,300)]:
+        ask(do='resize',width=width,height=height,steps=1)
+        ask(do='appearance',sidebarWidth=side,offset=0);time.sleep(.5)
+        state=ask(do='appearance')
+        assert state['rail'] and state['sidebar'], state
+        assert abs(state['width']-(width-side))<1, state
+        assert abs(state['railX']-side)<1, state
+        assert 0<=state['offset']<=state['maximum']
+        viewport=ask(do='eval',id=ids[0],js='window.innerWidth')['value']
+        assert abs(float(viewport)-(width-side-56))<=1, (viewport,width,side)
+    ask(do='resize',width=1180,height=780,steps=1)
+    ask(do='appearance',sidebarWidth=300,offset=0);time.sleep(.5)
+    state=ask(do='appearance')
+    target=state['tabs'][1]['id']
+    ask(do='appearance',click=222+90);time.sleep(.2)
+    assert next(t['id'] for t in ask(do='tabs')['tabs'] if t['active'])==target
+    ask(do='appearance',enable='');time.sleep(.4)
+    assert not ask(do='appearance')['rail']
+    ask(do='appearance',enable=mod_id);time.sleep(.4)
+    assert ask(do='appearance')['sidebar']
+    assert side_views==ask(do='appearance')['views'], 'Sidebar/mod switch rebuilt a webpage'
+    ask(do='picture',path='/tmp/search-mod-sidebar.png',page=False)
+    ask(do='appearance',settingsPage='appearance');ask(do='ui',settings=True);time.sleep(.4)
+    ask(do='picture',path='/tmp/search-mod-sidebar-settings.png',page=False)
+    ask(do='ui',settings=False);time.sleep(.6)
+    ask(do='ui',folded=True,peek=False);time.sleep(.5)
+    assert not ask(do='appearance')['rail']
+    ask(do='ui',peek=True);time.sleep(.5)
+    assert ask(do='appearance')['rail'] and ask(do='appearance')['sidebar']
+    ask(do='ui',folded=False,peek=False,sidebar=False);time.sleep(.6)
+    state=ask(do='appearance');assert state['rail'] and not state['sidebar'] and state['width']==1180
+    print('PASS: optional sidebar, shared tabs, width/viewport bounds, mod switching and folded reveal',flush=True)
+
     # A new upstream chrome feature must coexist with the mod's right rail.
     ask(do='appearance',bookmarksBar=True);time.sleep(.3)
     assert ask(do='appearance')['rail']

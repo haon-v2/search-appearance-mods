@@ -87,7 +87,7 @@ struct Fold: View {
                     .frame(height: Fold.top)
                     .frame(maxWidth: .infinity)
             }
-            if folding, !prefs.sidebar, browser.peeking {
+            if folding, (!prefs.sidebar || appearanceMods.usesEdgeRail), browser.peeking {
                 AppearanceTabChrome(browser: browser, overlay: true)
                     .transition(.move(edge: .top))
             }
@@ -167,7 +167,10 @@ struct Fold: View {
         let size = window.frame.size
         let inWindow = point.x >= 0 && point.x < size.width && point.y >= 0 && point.y < size.height
         // Distance from the left edge for the column, from the top for the strip.
-        let distance = prefs.sidebar ? point.x : (appearanceMods.usesEdgeRail ? min(size.height - point.y, size.width - point.x) : size.height - point.y)
+        let railDistance = min(size.height - point.y, size.width - point.x)
+        let distance = appearanceMods.usesEdgeRail
+            ? min(railDistance, prefs.sidebar ? point.x : .infinity)
+            : (prefs.sidebar ? point.x : size.height - point.y)
         if browser.peeking {
             pass()
             // Only this window counts, not another app's window over it. One
@@ -177,7 +180,10 @@ struct Fold: View {
             let onWindow = top == window.windowNumber
             let onOwnPanel = !onWindow && NSApp.windows.contains { $0.windowNumber == top }
             let reach = prefs.sidebar ? prefs.sideWidth : Metrics.strip
-            let over = onOwnPanel || (onWindow && inWindow && distance < reach)
+            let overChrome = appearanceMods.usesEdgeRail
+                ? (railDistance < Metrics.strip || (prefs.sidebar && point.x < prefs.sideWidth))
+                : distance < reach
+            let over = onOwnPanel || (onWindow && inWindow && overChrome)
             if over != inside { inside = over }
             peek(over)
         } else if inWindow, distance < Fold.edge {

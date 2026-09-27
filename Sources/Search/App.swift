@@ -290,7 +290,7 @@ struct ContentView: View {
                 .clipShape(EdgeRailPageShape(curved: edgeRailVisible, radius: appearanceMods.active?.rail?.cornerRadius ?? 64))
                 .padding(.trailing, edgeRailVisible ? 48 : 0)
                 .padding(.bottom, edgeRailVisible ? 8 : 0)
-                .padding(.leading, edgeRailVisible ? 8 : roomed.width)
+                .padding(.leading, roomed.width + (edgeRailVisible ? 8 : 0))
                 .padding(.top, roomed.height)
                 .offset(x: chrome.width - roomed.width, y: chrome.height - roomed.height)
 
@@ -303,7 +303,7 @@ struct ContentView: View {
                     .transition(.move(edge: .leading))
             }
 
-            if !browser.prefs.sidebar, !browser.folded, browser.active?.immersed != true {
+            if (!browser.prefs.sidebar || appearanceMods.usesEdgeRail), !browser.folded, browser.active?.immersed != true {
                 AppearanceTabChrome(browser: browser)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
@@ -312,7 +312,7 @@ struct ContentView: View {
             if barShown {
                 BookmarksBar(browser: browser, bookmarks: browser.bookmarks)
                     .padding(.trailing, edgeRailVisible ? 48 : 0)
-                    .padding(.leading, edgeRailVisible ? 8 : chrome.width)
+                    .padding(.leading, chrome.width + (edgeRailVisible ? 8 : 0))
                     .padding(.top, band)
                     .transition(.opacity)
             }
@@ -420,7 +420,7 @@ struct ContentView: View {
                 // Centred on the page, not on the window. The column of tabs
                 // is not what the field is standing over, and dimming it along
                 // with the page says otherwise.
-                .padding(.leading, sidebar ? browser.prefs.sideWidth : (edgeRailVisible ? 8 : 0))
+                .padding(.leading, (sidebar ? browser.prefs.sideWidth : 0) + (edgeRailVisible ? 8 : 0))
                 .padding(.trailing, edgeRailVisible ? 48 : 0)
                 .padding(.top, edgeRailVisible ? 50 : 0)
                 .padding(.bottom, edgeRailVisible ? 8 : 0)
@@ -683,12 +683,14 @@ struct ContentView: View {
 
     /// The column has its own corner for the lights, so the page beside it
     /// starts at the very top; the strip needs a band.
-    private var edgeRailVisible: Bool { appearanceMods.usesEdgeRail && !browser.prefs.sidebar && !browser.folded && browser.active?.immersed != true }
+    private var edgeRailVisible: Bool { appearanceMods.usesEdgeRail && !browser.folded && browser.active?.immersed != true }
 
     private var band: CGFloat {
         guard browser.active?.immersed != true else { return 0 }
         // Folded, the strip is out of the window and the page has its height.
-        return browser.prefs.sidebar || browser.folded ? 0 : (appearanceMods.usesEdgeRail ? 50 : Metrics.strip)
+        guard !browser.folded else { return 0 }
+        if appearanceMods.usesEdgeRail { return 50 }
+        return browser.prefs.sidebar ? 0 : Metrics.strip
     }
 
     /// Put the resting circles in the title bar, exactly over the buttons.

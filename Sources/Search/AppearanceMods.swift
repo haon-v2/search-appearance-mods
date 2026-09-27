@@ -41,7 +41,6 @@ struct AppearanceModsPage: View {
               } else {
                 mods.select(mod.id)
                 if mod.tabLayout == .edgeRail {
-                  browser.prefs.sidebar = false
                   browser.folded = false
                   browser.peeking = false
                 }
@@ -54,11 +53,20 @@ struct AppearanceModsPage: View {
           Text(mod.summary).font(.system(size: 12)).foregroundStyle(Palette.muted)
           Text("By \(mod.author) · API \(mod.schemaVersion)").font(.system(size: 11))
             .foregroundStyle(Palette.muted)
-          if mods.selectedID == mod.id && mod.tabLayout == .edgeRail && browser.prefs.sidebar {
-            Button("Show Mod Layout") {
-              browser.prefs.sidebar = false
-              browser.folded = false
-            }
+          if mods.selectedID == mod.id && mod.tabLayout == .edgeRail {
+            Toggle("Show sidebar with curved tabs", isOn: Binding(
+              get: { browser.prefs.sidebar },
+              set: { show in
+                withAnimation(Motion.glide) {
+                  browser.prefs.sidebar = show
+                  browser.folded = false
+                  browser.peeking = false
+                }
+              }
+            ))
+            .toggleStyle(.switch)
+            Text("Keep the resizable sidebar beside the curved rail, or turn it off for more page space.")
+              .font(.system(size: 11)).foregroundStyle(Palette.muted)
           }
         }.padding(12).background(Palette.wash, in: RoundedRectangle(cornerRadius: 10))
       }
