@@ -45,20 +45,26 @@ def integrate(tag):
     git('commit', '-m', f'Integrate Search {tag} into appearance loader {loader}')
     return True
 
-def main():
-    request = urllib.request.Request('https://api.github.com/repos/driceroland/Search/releases/latest', headers={'User-Agent':'Search-Appearance-Mod-Loader-Sync', 'Accept':'application/vnd.github+json'})
+def release_metadata(path):
+    headers = {'User-Agent':'Search-Appearance-Mod-Loader-Sync', 'Accept':'application/vnd.github+json'}
+    # CI's read-only token avoids the shared runner's anonymous rate limit.
+    # It is scoped to this step; browser users never need a token.
+    if token := os.environ.get('GH_TOKEN'):
+        headers['Authorization'] = 'Bearer ' + token
+    request = urllib.request.Request('https://api.github.com/repos/' + path, headers=headers)
     with urllib.request.urlopen(request, timeout=30) as response:
-        release = json.load(response)
+        return json.load(response)
+
+def main():
+    release = release_metadata('driceroland/Search/releases/latest')
     if release.get('draft') or release.get('prerelease'):
         raise RuntimeError('Expected a stable published Search release')
     changed = integrate(release['tag_name'])
     # Retry interrupted publications on the next run, even if the integration
     # was already pushed. Only drafts/missing releases can be published.
     tag = 'appearance-mods-v' + (ROOT/'LOADER_VERSION').read_text().strip()
-    request = urllib.request.Request('https://api.github.com/repos/haon-v2/search-appearance-mods/releases/tags/' + tag, headers={'User-Agent':'Search-Appearance-Mod-Loader-Sync'})
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
-            own_release = json.load(response)
+        own_release = release_metadata('haon-v2/search-appearance-mods/releases/tags/' + tag)
         publish = own_release['draft']
     except urllib.error.HTTPError as error:
         if error.code != 404: raise

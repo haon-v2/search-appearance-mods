@@ -28,6 +28,8 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
       - name: Integrate the latest stable Search release
         id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 Scripts/sync_upstream.py
       - name: Build the preview
         if: steps.sync.outputs.publish == 'true' || github.event_name != 'schedule'
