@@ -2,6 +2,20 @@
 
 Search itself is by Drice Roland / Office Commun and its contributors. Its unchanged changelog is in CHANGELOG.md.
 
+## 0.3.1
+
+- Integrate Search v1.0.4, including multiple windows, native tab groups, right-side sidebar, shortcuts, import improvements, and upstream security fixes.
+- Adapt curved-rail spacing and folded reveal for sidebars on either side.
+- Preserve Curve folder membership through Search's new session decoder and window records. Share folder definitions between windows and handle moving/removing folders safely.
+- Keep the preview updater running from Search's new shared startup path, using the community release feed rather than the official signed updater.
+- Include Search's read-only AppleScript dictionary and updated icon generation; show the upstream What's New card for the integrated browser version.
+- Add native multi-window, right-sidebar and group/session restart regression checks.
+
+## 0.3.0
+
+- Independent sidebar-folder modules, compatible with Curve Tabs. Curve Tab Folders is distributed separately.
+- Folder creation, renaming, collapse, drag-to-folder, Curve JSON import/export and per-space persistence.
+
 ## 0.2.1
 
 - Optional “Show sidebar with curved tabs” switch in Appearance settings. Enabling a rail mod preserves the existing sidebar choice.

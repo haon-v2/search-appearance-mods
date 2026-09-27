@@ -27,7 +27,7 @@ The `Search update compatibility` GitHub Actions workflow checks the latest **st
 
 1. Merge the release into this fork, preserving upstream commit history and attribution. Only the fork’s introductory README gets an automatic documentation conflict resolution; upstream’s full README is retained separately.
 2. Stop on code, workflow, license or other conflicts. No incompatible build is published.
-3. Build an Apple Silicon preview, validate appearance packages and update manifests, and run the actual app in an isolated test profile. Tests cover the standard fallback, existing schema-1 edge-rail packages, page interaction, selection, closing, reordering around the corner, overflow, resizing, light/dark mode and folded reveal.
+3. Build an Apple Silicon preview, validate appearance packages and update manifests, and run the actual app in an isolated test profile. Tests cover the standard fallback, existing schema-1 edge-rail packages, page interaction, selection, closing, reordering around the corner, overflow, resizing, light/dark mode, folded reveal, sidebars on either side, folder operations across multiple windows, and restoring folders and native groups after a restart.
 4. Only after those checks pass, publish a separate preview release with its source, checksum and update manifest. A draft is invisible to the app until all assets are uploaded. The publish job cannot execute the merged browser code and the build job has no repository write permission.
 5. The preview offers that release on its next check; you can check immediately in Settings → About.
 

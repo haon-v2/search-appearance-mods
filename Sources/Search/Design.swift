@@ -17,6 +17,9 @@ enum Palette {
     static let faint = Color(nsColor: NS.faint)         // neutral-300 · neutral-700
     static let hairline = Color(nsColor: NS.hairline)   // neutral-200 · neutral-800
     static let wash = Color(nsColor: NS.wash)           // the live tab
+    /// The live pin: among squares that already wear a faint grey, the one
+    /// you are on stands out from them as a live row does from the white.
+    static let pinLive = Color(nsColor: NS.pinLive)
     static let hover = Color(nsColor: NS.hover)         // the one under the pointer
     /// The only two that aren't grey: a connection nobody can read on the
     /// way, and one anybody can (see SiteCard.swift).
@@ -33,6 +36,7 @@ enum Palette {
         static let hairline = pair(0.91, 0.20, role: "hairline")
         static let wash = pair(0.937, 0.175, role: "wash")
         static let hover = pair(0.965, 0.15, role: "hover")
+        static let pinLive = pair(0.90, 0.21)
         /// The resting traffic lights, drawn by hand when the app is behind.
         static let resting = pair(0.80, 0.30)
         static let safe = tint(light: (0.08, 0.50, 0.24), dark: (0.29, 0.87, 0.50))
@@ -144,10 +148,26 @@ enum Metrics {
 // One spring for anything that moves between two places, one for anything that
 // arrives or leaves. Using the same two everywhere is most of why a thing feels
 // like a single piece of software rather than a pile of views.
+// When macOS Reduce Motion is on in System Settings, transitions become
+// immediate so the interface does not jump or slide.
 enum Motion {
-    static let glide = Animation.spring(response: 0.34, dampingFraction: 0.82)
-    static let settle = Animation.spring(response: 0.30, dampingFraction: 0.86)
-    static let quick = Animation.easeOut(duration: 0.14)
+    /// Whether interface transitions should be immediate, following the
+    /// Mac's own accessibility setting.
+    static var reduced: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
+    static var glide: Animation? {
+        reduced ? nil : .spring(response: 0.34, dampingFraction: 0.82)
+    }
+
+    static var settle: Animation? {
+        reduced ? nil : .spring(response: 0.30, dampingFraction: 0.86)
+    }
+
+    static var quick: Animation? {
+        reduced ? nil : .easeOut(duration: 0.14)
+    }
 }
 
 /// Search's mark — Drice's Subtract.svg, a pill with an S cut out of it,
@@ -238,6 +258,7 @@ struct Shake: GeometryEffect {
     }
 
     func effectValue(size: CGSize) -> ProjectionTransform {
+        guard !Motion.reduced else { return ProjectionTransform(.identity) }
         // Three there-and-backs, tapering to nothing, so it settles rather than
         // stopping mid-swing.
         let decay = 1 - travel

@@ -108,10 +108,18 @@ enum Web {
         // works only from a click or a key, as Safari's pop-up blocking has
         // it; a sign-in window opened by its button still opens.
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
-        config.mediaTypesRequiringUserActionForPlayback = .audio
+        // Sound waits for a click, as everywhere; video too when Settings
+        // says videos wait (Never Auto-Play, in Safari's words).
+        config.mediaTypesRequiringUserActionForPlayback = Web.playback
         if Store.testing, !Store.measuring { config.preferences.inactiveSchedulingPolicy = .none }
         inspector(config.preferences)
         return config
+    }
+
+    /// What a page may not play until it is clicked or a key pressed: sound,
+    /// and video as well with Settings › General › Videos wait for a click.
+    static var playback: WKAudiovisualMediaTypes {
+        Store.settings.bool(forKey: Preferences.waitsKey) ? .all : .audio
     }
 
     /// Every page view there is, for the bench.
@@ -150,6 +158,70 @@ enum Muter {
     }
 }
 
+/// Sites you let play sound by themselves, from the site card: Safari's
+/// per-site Allow All Auto-Play (#223). Every other site keeps the default,
+/// sound waiting for a click. Remembered for the site, as its zoom is, and
+/// never from a private tab. Settings › Videos wait for a click wins: with
+/// it on, no site plays by itself.
+///
+/// WebKit takes it for each page as it loads, through the page's own
+/// preferences, under a name outside the public framework — asked for
+/// first, as `Muter` asks, so a WebKit without it only leaves the site
+/// waiting for a click. Its values, checked on macOS 26: 0 the default,
+/// 1 allow, 2 allow without sound, 3 deny. Allow lets video play whatever
+/// `mediaTypesRequiringUserActionForPlayback` says, which is why the
+/// global switch is asked here and not left to that.
+enum Autoplay {
+    private static func key(_ host: String) -> String { "autoplay." + host }
+
+    static func allowed(_ host: String) -> Bool {
+        Store.settings.bool(forKey: key(host))
+    }
+
+    /// Off keeps nothing, as a site at the usual zoom keeps nothing.
+    static func set(_ on: Bool, for host: String) {
+        if on {
+            Store.settings.set(true, forKey: key(host))
+        } else {
+            Store.settings.removeObject(forKey: key(host))
+        }
+    }
+
+    /// For a page about to load at `url`: allowed to play, or left alone.
+    static func apply(to preferences: WKWebpagePreferences, for url: URL, shy: Bool) {
+        guard !shy, let host = url.host(), allowed(host),
+              !Store.settings.bool(forKey: Preferences.waitsKey) else { return }
+        let set = NSSelectorFromString("_setAutoplayPolicy:")
+        guard preferences.responds(to: set) else { return }
+        typealias Setter = @convention(c) (AnyObject, Selector, Int) -> Void
+        unsafeBitCast(preferences.method(for: set), to: Setter.self)(preferences, set, 1)
+    }
+}
+
+/// How far down its page a tab is. Its own object, watched by the fill in
+/// the tab's pill alone: as part of the tab, every percent scrolled re-ran
+/// everything that watches the tab — the page's stage, the buttons, the
+/// row — two to four milliseconds of the window's time each, while WebKit
+/// needed that thread to put the scrolled page on screen.
+@MainActor
+final class Reading: ObservableObject {
+    @Published var value: Double = 0
+}
+
+/// The fill itself: the grey that grows from the left of the tab you are on
+/// as you read down its page, in a width it is given.
+struct ReadingFill: View {
+    @ObservedObject var meter: Reading
+    let width: CGFloat
+
+    var body: some View {
+        Rectangle()
+            .fill(Palette.ink.opacity(0.055))
+            .frame(width: width * meter.value)
+            .animation(.easeOut(duration: 0.15), value: meter.value)
+    }
+}
+
 @MainActor
 final class Tab: ObservableObject, Identifiable {
     let id = UUID()
@@ -166,7 +238,8 @@ final class Tab: ObservableObject, Identifiable {
     /// The web view if there is one yet, for the callers that must not be
     /// the reason there is.
     private(set) var built: PageView?
-    private let configuration: WKWebViewConfiguration
+    private var configuration: WKWebViewConfiguration
+    let extensionReturn = ExtensionReturnNavigation()
 
     /// Whether its page was made with the extension controller in it — every
     /// ordinary tab, and a private one only when extensions were allowed
@@ -188,6 +261,38 @@ final class Tab: ObservableObject, Identifiable {
 
     @Published private(set) var title = ""
     @Published private(set) var address: URL?
+    /// The address of the page that is actually on screen. `address` moves
+    /// to where the tab is going as soon as a load starts, while the page
+    /// and its certificate are still the old one's: what is said about the
+    /// connection, and which passwords a sign-in box is offered, go by this
+    /// one, set when the new page has arrived.
+    @Published private(set) var committed: URL?
+    var pageAddress: URL? { committed ?? address }
+
+    func didCommit() {
+        if let url = built?.url, url.absoluteString != "about:blank" { committed = url }
+        // A page arrived after all: the address is its own again.
+        if held != nil, let url = built?.url, url.absoluteString != "about:blank" {
+            held = nil
+            address = url
+        }
+    }
+
+    /// An address the tab shows, and reports to extensions, without loading
+    /// it (see ExtensionAuth.handOver). The page on screen stays. WebKit
+    /// going back to that page's address as the cancelled load unwinds is not
+    /// a move, so the observer below lets it pass. The page is WebKit's own
+    /// current item, not `committed`, which a same-site load in progress has
+    /// already moved on.
+    private(set) var held: URL?
+    private var heldOver: URL?
+
+    func hold(_ url: URL) {
+        held = url
+        heldOver = built?.backForwardList.currentItem?.url
+        address = url
+        failure = nil
+    }
     @Published private(set) var progress: Double = 0
     @Published private(set) var loading = false
     @Published private(set) var canGoBack = false
@@ -196,8 +301,13 @@ final class Tab: ObservableObject, Identifiable {
     /// connection. Shown in place of the page rather than in a dialog.
     @Published var failure: String?
     /// How far down the page you are, nought to one. The tab's own pill fills
-    /// with it.
-    @Published var reading: Double = 0
+    /// with it. Kept apart from the rest of the tab (see Reading): it changes
+    /// all the way down a page, and only the fill has any use for it.
+    let meter = Reading()
+    var reading: Double {
+        get { meter.value }
+        set { if meter.value != newValue { meter.value = newValue } }
+    }
 
     /// True while the page has been stripped back to its article.
     @Published private(set) var reader = false
@@ -230,12 +340,20 @@ final class Tab: ObservableObject, Identifiable {
     /// The letter a pinned tab is reduced to, and what a tab shows in place of
     /// an icon it doesn't have yet.
     var monogram: String {
+        // A file on this Mac has no host: its name's first letter.
+        if let address, address.isFileURL {
+            let name = address.lastPathComponent.trimmingCharacters(in: CharacterSet(charactersIn: "/."))
+            return name.first.map { String($0).uppercased() } ?? "•"
+        }
         let host = address?.host()?.replacingOccurrences(of: "www.", with: "") ?? ""
         return host.first.map { String($0).uppercased() } ?? "•"
     }
 
     private func adoptIcon() {
-        guard let host = address?.host()?.lowercased() else { return }
+        guard let host = address?.host()?.lowercased() else {
+            icon = nil
+            return
+        }
         icon = Favicons.shared.cached(host)
     }
 
@@ -250,11 +368,18 @@ final class Tab: ObservableObject, Identifiable {
     /// A sideways swipe in progress, for the disc that shows it.
     @Published var pull: Pull?
 
+    /// What a site opens at until you zoom it yourself: Settings › General ›
+    /// Page zoom. Read from the file, not from the one object the window holds.
+    static var defaultZoom: CGFloat {
+        CGFloat(Store.settings.object(forKey: "pageZoom") as? Double ?? 1)
+    }
+
     /// Remembered for the site, not for the tab: setting a paper's type to
-    /// 125% once should be the last time you think about it.
+    /// 125% once should be the last time you think about it. A site at the
+    /// size every site starts at keeps nothing, and follows that size.
     func rememberZoom() {
         guard let host = address?.host(), !shy else { return }
-        if abs(zoom - 1) < 0.01 {
+        if abs(zoom - Tab.defaultZoom) < 0.01 {
             Store.settings.removeObject(forKey: "zoom." + host)
         } else {
             Store.settings.set(Double(zoom), forKey: "zoom." + host)
@@ -263,10 +388,11 @@ final class Tab: ObservableObject, Identifiable {
 
     func applyRememberedZoom() {
         guard let host = address?.host() else { return }
-        let kept = Store.settings.object(forKey: "zoom." + host) as? Double ?? 1
-        guard abs(CGFloat(kept) - web.pageZoom) > 0.004 else { return }
-        web.pageZoom = CGFloat(kept)
-        zoom = CGFloat(kept)
+        let kept = (Store.settings.object(forKey: "zoom." + host) as? Double).map { CGFloat($0) }
+            ?? Tab.defaultZoom
+        guard abs(kept - web.pageZoom) > 0.004 else { return }
+        web.pageZoom = kept
+        zoom = kept
     }
 
     /// How much bigger the page is being drawn. Not a magnifying glass over
@@ -274,9 +400,6 @@ final class Tab: ObservableObject, Identifiable {
     /// stays as sharp at 200% as it was at 100%.
     @Published private(set) var zoom: CGFloat = 1
 
-    /// Where the page is and which way it just went, for anything that wants
-    /// to follow along.
-    var onScroll: ((Tab, Double, Double) -> Void)?
     var onZoom: ((Tab, CGFloat) -> Void)?
     /// The resolved address under the pointer, or nil when it leaves a link.
     var onLink: ((Tab, String?) -> Void)?
@@ -339,7 +462,6 @@ final class Tab: ObservableObject, Identifiable {
     private let passkeyRelay = PasskeyRelay()
     private let hovered = HoveredLink()
     private let ears = AudioWatch()
-    private var lastY: Double = 0
 
     /// A tab that keeps nothing: its own cookies, no history, no place in the
     /// session. Signed in as nobody, and forgotten when it goes.
@@ -354,11 +476,25 @@ final class Tab: ObservableObject, Identifiable {
     /// hand you back to it when they are done.
     var opener: Tab.ID?
 
+    /// A window a page opened at a size of its own, or without a toolbar:
+    /// a pop-up, not a link. It is named by its site, never by its title — a
+    /// page that opens one can call it anything, "Sign in with Google" over
+    /// somebody else's address included.
+    var popup = false
+
     /// One letter, when the tab has been pinned. A pinned tab keeps its place
     /// at the head of the row and gives up its title for that letter — which
     /// is all you need for the five or six pages you keep open all day.
     @Published var folderID: UUID?
     @Published var pin: String?
+    /// For a pin, the page it was pinned at: a double-click on it goes back
+    /// there (Browser.goHome).
+    var home: URL?
+    /// For a pin, which of the pins it is, in every window (see Pins.swift).
+    var pinID: UUID?
+
+    /// The group that holds this ordinary tab in the sidebar.
+    @Published var groupID: UUID?
 
     /// A name you gave it, in place of whatever the page calls itself. It
     /// stays through navigation: a tab you named is a tab you are keeping for
@@ -396,6 +532,9 @@ final class Tab: ObservableObject, Identifiable {
     /// can't find your way back to.
     var label: String {
         if let name, !name.isEmpty { return name }
+        if popup, let host = address?.host(), !host.isEmpty {
+            return host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
+        }
         if !title.isEmpty { return title }
         if let address { return Address.pretty(address) }
         return "New Tab"
@@ -476,8 +615,19 @@ final class Tab: ObservableObject, Identifiable {
                     // a pinned tab lost the only thing that could bring it
                     // back, and vanished from the session altogether.
                     guard fresh.absoluteString != "about:blank" else { return }
-                    let moved = fresh.host() != self.address?.host()
+                    if self.held != nil {
+                        if fresh == self.heldOver { return }
+                        self.held = nil
+                    }
+                    let freshHost = fresh.host()?.lowercased()
+                    let currentHost = self.address?.host()?.lowercased()
+                    let moved = freshHost != currentHost
                     self.address = fresh
+                    // Within the same origin — history.pushState, a fragment —
+                    // the page on screen is the one at the new address.
+                    if let now = self.committed, now.scheme == fresh.scheme, now.host() == fresh.host(), now.port == fresh.port {
+                        self.committed = fresh
+                    }
                     if moved { self.adoptIcon() }
                 }
             },
@@ -518,9 +668,10 @@ final class Tab: ObservableObject, Identifiable {
 
     func magnify(by factor: CGFloat) { magnify(to: web.pageZoom * factor) }
 
-    /// ⌘0 undoes both kinds of zoom at once — whichever one you reached for.
+    /// ⌘0 undoes both kinds of zoom at once — whichever one you reached for —
+    /// back to the size every site starts at.
     func resetZoom() {
-        magnify(to: 1)
+        magnify(to: Tab.defaultZoom)
         guard web.magnification != 1 else { return }
         web.magnification = 1
         onZoom?(self, 1)
@@ -635,9 +786,9 @@ final class Tab: ObservableObject, Identifiable {
         // The host now, while the page is still the sign-in page: a moment
         // later it may be somewhere else entirely, and that is not where
         // the password belongs.
-        guard let host = address?.host()?.lowercased() else { return }
+        guard let host = pageAddress?.host()?.lowercased() else { return }
         let bare = host.hasPrefix("www.") ? String(host.dropFirst(4)) : host
-        sent = (bare, user, password, address?.scheme?.lowercased() == "http", Date())
+        sent = (bare, user, password, pageAddress?.scheme?.lowercased() == "http", Date())
     }
 
     /// The page has moved on — a new document has loaded, or the sign-in
@@ -722,9 +873,6 @@ final class Tab: ObservableObject, Identifiable {
         // core on the thread WebKit needs to put the scrolled page on screen.
         let fraction = ceiling > 0 ? (min(1, max(0, y / ceiling)) * 100).rounded() / 100 : 0
         if fraction != reading { reading = fraction }
-        let delta = y - lastY
-        lastY = y
-        onScroll?(self, y, delta)
     }
 
     func go(to url: URL) {
@@ -741,10 +889,10 @@ final class Tab: ObservableObject, Identifiable {
         // stop being blank in the same frame the field disappears, or the empty
         // state flashes back for an instant on its way out.
         address = url
+        held = nil
         title = ""
         failure = nil
         reading = 0
-        lastY = 0
         reader = false
         typing = false
         immersed = false
@@ -781,7 +929,6 @@ final class Tab: ObservableObject, Identifiable {
         memory = nil
         picture = nil
         reading = 0
-        lastY = 0
         noisy = false
         stale = false
         pull = nil
@@ -810,6 +957,28 @@ final class Tab: ObservableObject, Identifiable {
         discard()
     }
 
+    /// A page moved to another space must use that space's cookies. WebKit
+    /// binds the store when the view is made, so keep its restorable state
+    /// and build the view again with the destination's store.
+    func rehome(in space: UUID) {
+        guard !shy, !bench, store !== Spaces.store(for: space) else { return }
+        if let built {
+            memory = built.isLoading ? nil : built.interactionState
+            pending = address ?? built.url
+            picture = nil
+            cover = nil
+            discard()
+        }
+        configuration = Web.configuration(space: space)
+    }
+
+    /// Settings › Videos wait for a click, changed: the page's next view
+    /// is made the new way. One already made keeps what it was made with —
+    /// WebKit fixes it then — until the tab closes or sleeps.
+    func playbackChanged() {
+        configuration.mediaTypesRequiringUserActionForPlayback = Web.playback
+    }
+
     /// Whether the page holds something typed and not yet sent — a draft, a
     /// half-filled form. A page that can't answer is treated as holding
     /// nothing: a PDF, an image, a page whose process has already gone.
@@ -836,6 +1005,31 @@ final class Tab: ObservableObject, Identifiable {
                 DispatchQueue.main.async { done(data) }
             }
         }
+    }
+
+    /// A small picture of the page for the tab switcher. A sleeping tab's
+    /// comes from the picture kept for waking it; a tab brought back from
+    /// last time and not opened yet has none, rather than a page built for it.
+    func preview(width: CGFloat, _ done: @escaping (NSImage?) -> Void) {
+        if let picture {
+            DispatchQueue.global(qos: .userInitiated).async {
+                let source = CGImageSourceCreateWithData(picture as CFData, nil)
+                let options = [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceThumbnailMaxPixelSize: Int(width * 2)
+                ] as CFDictionary
+                let thumbnail = source.flatMap { CGImageSourceCreateThumbnailAtIndex($0, 0, options) }
+                DispatchQueue.main.async {
+                    let image = thumbnail.map { NSImage(cgImage: $0, size: NSSize(width: $0.width, height: $0.height)) }
+                    done(image)
+                }
+            }
+            return
+        }
+        guard let built else { return done(nil) }
+        let configuration = WKSnapshotConfiguration()
+        configuration.snapshotWidth = NSNumber(value: Double(width))
+        built.takeSnapshot(with: configuration) { image, _ in done(image) }
     }
 
     nonisolated private static func jpeg(_ image: CGImage) -> Data? {
@@ -914,8 +1108,9 @@ final class Tab: ObservableObject, Identifiable {
         }
         // A tab that slept has its own history to go back to — the page, its
         // back list and its scroll position, in one. Anything else starts
-        // from the address.
-        if let state {
+        // from the address. A file does too: its history comes back without
+        // the folder it may read, and showed nothing.
+        if let state, !url.isFileURL {
             view.interactionState = state
         } else {
             view.open(url)
@@ -978,7 +1173,6 @@ final class Tab: ObservableObject, Identifiable {
         pending = nil
         failure = nil
         reading = 0
-        lastY = 0
         reader = false
         typing = false
         immersed = false
@@ -1003,6 +1197,14 @@ final class Tab: ObservableObject, Identifiable {
         adoptIcon()
     }
 
+    /// A new tab again: where it was going turned out to be a file, not a
+    /// page, and an address kept for it downloads the file once more
+    /// whenever the tab is opened (see Browser.dropEmpty).
+    func forget() {
+        address = nil
+        icon = nil
+    }
+
     func touch() { touched = Date() }
 
     /// True when the web view holds nothing — never loaded, or emptied —
@@ -1013,16 +1215,20 @@ final class Tab: ObservableObject, Identifiable {
         return there.absoluteString == "about:blank" && pending == nil && address != nil
     }
 
-    /// Again from the network. A view that has lost its document is given
-    /// the address back instead: there is nothing else for it to reload.
-    func reload() {
+    /// A view that has lost its document is given the address back instead:
+    /// there is nothing else for it to reload.
+    func reload(fromOrigin: Bool = false) {
         // A pin put down with ⌘W has no view left to reload; waking it is
         // the reload.
         guard !wake() else { return }
-        if hollow, let address {
+        reader = false
+        // A file is read again with the folder it may read (see open).
+        if let address, hollow || address.isFileURL {
             web.open(address)
-        } else {
+        } else if fromOrigin {
             web.reloadFromOrigin()
+        } else {
+            web.reload()
         }
     }
     func stop() { web.stopLoading() }
@@ -1034,7 +1240,6 @@ final class Tab: ObservableObject, Identifiable {
     /// Called when the tab is thrown away. Without it the view keeps running
     /// whatever the page left behind — timers, video, sockets.
     func close() {
-        onScroll = nil
         onZoom = nil
         onLink = nil
         onPick = nil
@@ -1138,8 +1343,21 @@ final class MiddleRelay: NSObject, WKScriptMessageHandler {
     (function () {
       if (window.__officeMiddle) return;
       window.__officeMiddle = true;
-      document.addEventListener('auxclick', function (e) {
-        if (e.button !== 1 || !e.isTrusted || e.defaultPrevented) return;
+      // Heard on the way down, before the page's own handlers, since some
+      // stop the event there — YouTube's links did, and a middle-click on
+      // them opened nothing, only some of the time. Whether the page wanted
+      // the click for itself is asked once they have all run: a page that
+      // prevented it keeps it, as in Chrome.
+      // The link is found now: once the event is over its path is empty.
+      window.addEventListener('auxclick', function (e) {
+        if (e.button !== 1 || !e.isTrusted) return;
+        var href = link(e);
+        if (!href) return;
+        setTimeout(function () {
+          if (!e.defaultPrevented) window.webkit.messageHandlers.officeMiddle.postMessage({ href: href });
+        }, 0);
+      }, true);
+      function link(e) {
         // The path, not the parents: a link inside an open shadow root is
         // on it too. An <area> of an image map is a link, and so is an SVG
         // <a>, whose href is an object that holds the address as written.
@@ -1153,10 +1371,10 @@ final class MiddleRelay: NSObject, WKScriptMessageHandler {
             try { href = href.baseVal ? new URL(href.baseVal, el.baseURI).href : ''; } catch (_) { href = ''; }
           }
           if (!href) continue;
-          window.webkit.messageHandlers.officeMiddle.postMessage({ href: href });
-          return;
+          return href;
         }
-      });
+        return '';
+      }
     })();
     """
 
@@ -1183,6 +1401,11 @@ final class PageView: WKWebView {
     /// What extensions added to the right-click menu, at the end of it.
     override func willOpenMenu(_ menu: NSMenu, with event: NSEvent) {
         super.willOpenMenu(menu, with: event)
+        // WebKit names it for a window, but a new window's page arrives here
+        // as a new tab (Browser's createWebViewWith), so it says so.
+        if let item = menu.items.first(where: { $0.identifier?.rawValue == "WKMenuItemIdentifierOpenLinkInNewWindow" }) {
+            item.title = "Open Link in New Tab"
+        }
         if let item = menu.items.first(where: { $0.identifier?.rawValue == "WKMenuItemIdentifierSearchWeb" }),
            let name = searchName?() {
             webSearch = (item.target, item.action)
@@ -1195,7 +1418,7 @@ final class PageView: WKWebView {
             item.action = #selector(searchSelection(_:))
         }
         guard #available(macOS 15.4, *),
-              let tab = Extensions.shared.browser?.tabs.first(where: { $0.built === self })
+              let tab = Browsers.all.lazy.flatMap(\.tabs).first(where: { $0.built === self })
         else { return }
         let items = Extensions.shared.menuItems(for: tab)
         guard !items.isEmpty else { return }
@@ -1359,6 +1582,21 @@ final class PageView: WKWebView {
     private var showing = false
     private var going = false
     private var pulls = 0
+    /// Armed and held there: in a moment the disc becomes the list of pages
+    /// that way, and moving the fingers up or down picks one (as in Dia).
+    private var holding: DispatchWorkItem?
+    private var stops: [Stop]?
+    private var items: [WKBackForwardListItem] = []
+    private var picked = 0
+    /// How far the fingers have gone up (or down, below nought) since the
+    /// last step through the list.
+    private var climbed: CGFloat = 0
+    /// Settings › General › Hold a swipe to pick from history. Off unless
+    /// asked for; off, a held swipe is a swipe like any other.
+    static var holdsHistory = false
+    /// How long armed before the list, and how far up or down a step is.
+    private static let hold: TimeInterval = 0.45
+    private static let step: CGFloat = 22
 
     /// How far the fingers travel before letting go means it. It was 110,
     /// and going back took a long reach across the trackpad — "too far",
@@ -1454,8 +1692,12 @@ final class PageView: WKWebView {
     override func scrollWheel(with event: NSEvent) {
         onTouch?()
         // The page gets every event first and scrolls as it always did. The
-        // swipe is only read, never taken.
-        super.scrollWheel(with: event)
+        // swipe is only read, never taken — except while its list is open,
+        // when up and down are picking a page, not scrolling this one. The
+        // gesture's end still reaches the page, which saw it begin.
+        if stops == nil || event.phase == .ended || event.phase == .cancelled {
+            super.scrollWheel(with: event)
+        }
         // Only a live trackpad gesture — not its glide afterwards, and not a
         // mouse wheel, which has no beginning or end to speak of.
         guard event.momentumPhase == [] else { return }
@@ -1471,6 +1713,10 @@ final class PageView: WKWebView {
             spent = false
             armedNow = false
             showing = false
+            holding?.cancel()
+            holding = nil
+            stops = nil
+            items = []
             // A disc still on its way out belongs to the last gesture. It is
             // already invisible; it is only taken off the stage so the next
             // one arrives fresh rather than fading back in.
@@ -1505,6 +1751,7 @@ final class PageView: WKWebView {
                 return
             }
             sideways += event.scrollingDeltaX
+            if stops != nil { climb(event) }
             tell()
         case .ended:
             release()
@@ -1551,7 +1798,16 @@ final class PageView: WKWebView {
         }
 
         let armed = travel >= PageView.arm
-        if armed != armedNow {
+        if PageView.holdsHistory, stops == nil, armed != armedNow {
+            holding?.cancel()
+            holding = nil
+            if armed {
+                let hold = DispatchWorkItem { [weak self] in self?.openList() }
+                holding = hold
+                DispatchQueue.main.asyncAfter(deadline: .now() + PageView.hold, execute: hold)
+            }
+        }
+        if armed != armedNow, stops == nil {
             // Two different taps: one for reaching it, a lighter one for
             // stepping back from it, so you know without looking that
             // letting go now is safe.
@@ -1560,20 +1816,69 @@ final class PageView: WKWebView {
             )
         }
         armedNow = armed
-        settle(Pull(back: back, travel: travel, armed: armed, going: false))
+        settle(Pull(back: back, travel: travel, armed: armed, going: false, stops: stops, picked: picked))
+    }
+
+    /// Held long enough: the pages that way, nearest to the fingers — at the
+    /// bottom going back, at the top going forward — and that one picked.
+    private func openList() {
+        holding = nil
+        guard !spent, armedNow, stops == nil else { return }
+        let list = back ? Array(backForwardList.backList.suffix(8)) : Array(backForwardList.forwardList.prefix(8))
+        guard list.count >= 2 else { return }
+        items = list
+        stops = list.map { Stop(title: $0.title ?? "", url: $0.url) }
+        picked = back ? list.count - 1 : 0
+        climbed = 0
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+        tell()
+    }
+
+    /// Through the list a step at a time, the list sliding with the fingers
+    /// under a light that stays put, as in Dia: down brings the row above
+    /// under it — further back, or nearer going forward — and up the row
+    /// below. With natural scrolling the deltas run with the fingers,
+    /// without it against them.
+    private func climb(_ event: NSEvent) {
+        guard let stops else { return }
+        let sign: CGFloat = event.isDirectionInvertedFromDevice ? 1 : -1
+        climbed += -sign * event.scrollingDeltaY
+        var moved = false
+        while climbed >= PageView.step, picked < stops.count - 1 {
+            picked += 1
+            climbed -= PageView.step
+            moved = true
+        }
+        while climbed <= -PageView.step, picked > 0 {
+            picked -= 1
+            climbed += PageView.step
+            moved = true
+        }
+        // At either end, the fingers going on further count for nothing.
+        climbed = max(-PageView.step, min(PageView.step, climbed))
+        if moved { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
     }
 
     private func release() {
         defer { spent = true }
+        // Let go before the list came: it doesn't come now.
+        holding?.cancel()
+        holding = nil
         let flicked = !spent && free == true && travel >= PageView.flick
             && (asked.map { Date().timeIntervalSince($0) <= PageView.flickTime } ?? false)
-        guard !spent, free == true, armedNow || flicked else {
+        guard !spent, free == true, armedNow || flicked || stops != nil else {
             settle(nil)
             return
         }
         going = true
-        settle(Pull(back: back, travel: travel, armed: true, going: true))
-        if back { goBack() } else { goForward() }
+        settle(Pull(back: back, travel: travel, armed: true, going: true, stops: stops, picked: picked))
+        if stops != nil, items.indices.contains(picked) {
+            go(to: items[picked])
+        } else if back {
+            goBack()
+        } else {
+            goForward()
+        }
         pulls += 1
         let mine = pulls
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.32) { [weak self] in
@@ -1584,6 +1889,12 @@ final class PageView: WKWebView {
     }
 
     private func settle(_ pull: Pull?) {
+        if pull == nil {
+            holding?.cancel()
+            holding = nil
+            stops = nil
+            items = []
+        }
         showing = pull != nil
         onPull?(pull)
     }
@@ -1645,7 +1956,14 @@ extension WKWebView {
     /// Mac's browser, opened a tab that stayed empty.
     func open(_ url: URL) {
         if url.isFileURL {
-            loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+            // Its folder, for the pictures and styles beside it — unless the
+            // folder is the home folder, the disk or a volume, where the
+            // file alone is what was opened.
+            let folder = url.deletingLastPathComponent().standardizedFileURL
+            let home = FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL
+            let tooWide = folder == home || ["/", "/Users", "/Volumes"].contains(folder.path)
+                || folder.deletingLastPathComponent().path == "/Volumes"
+            loadFileURL(url, allowingReadAccessTo: tooWide ? url : folder)
         } else {
             load(URLRequest(url: url))
         }

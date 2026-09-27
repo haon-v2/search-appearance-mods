@@ -23,9 +23,29 @@ enum Glyph: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which edge the tab column sits on when tabs are arranged in a sidebar.
+enum SidebarPosition: String, CaseIterable, Identifiable {
+    case left, right
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .left: return "Left"
+        case .right: return "Right"
+        }
+    }
+}
+
 @MainActor
 final class Preferences: ObservableObject {
     private let store = Store.settings
+
+    /// Back, forward and reload before the tabs rather than after them, with
+    /// the tabs across the top. Off unless asked for.
+    @Published var navigationLeft: Bool {
+        didSet { store.set(navigationLeft, forKey: "toolbar.left") }
+    }
 
     /// A local socket a script can drive the browser through, in tabs of its
     /// own. Off unless asked for — in Settings, which is also what leaves
@@ -46,11 +66,15 @@ final class Preferences: ObservableObject {
             look.apply()
         }
     }
-    /// Titles down the left instead of across the top.
+    /// Titles down a side instead of across the top.
     @Published var sidebar: Bool {
         didSet { store.set(sidebar, forKey: "sidebar") }
     }
-    /// The column folded away whenever the pointer isn't at the left edge,
+    /// Which side the column is on when it is shown vertically.
+    @Published var sidePosition: SidebarPosition {
+        didSet { store.set(sidePosition.rawValue, forKey: "sidebar.position") }
+    }
+    /// The column folded away whenever the pointer isn't at its edge,
     /// rather than only after ⌘S (see Fold.swift). Off unless asked for.
     @Published var sideHides: Bool {
         didSet { store.set(sideHides, forKey: "sidebar.hides") }
@@ -68,10 +92,22 @@ final class Preferences: ObservableObject {
     @Published var customEngine: String {
         didSet { store.set(customEngine, forKey: "search.custom") }
     }
+    /// Shortcuts to a site's own search, ahead of the default engine (see
+    /// Keyword.swift). Empty until someone adds one.
+    @Published var keywords: [Keyword] {
+        didSet { store.set((try? JSONEncoder().encode(keywords)) ?? Data(), forKey: "search.keywords") }
+    }
     /// Tabs nobody has looked at for half an hour give their page back and
     /// keep where they were. On unless turned off.
     @Published var sleepsTabs: Bool {
         didSet { store.set(sleepsTabs, forKey: "tabs.sleep") }
+    }
+    /// A tab opened behind the page — ⌘-click, the middle button, a batch
+    /// of links from another app — waits to load until it is gone to, as a
+    /// tab brought back from the last session does (see Browser.open).
+    /// Off unless asked for.
+    @Published var lazyTabs: Bool {
+        didSet { store.set(lazyTabs, forKey: "tabs.lazy") }
     }
     @Published var showsReading: Bool {
         didSet { store.set(showsReading, forKey: "tabs.reading") }
@@ -79,6 +115,15 @@ final class Preferences: ObservableObject {
     /// The ad blocker. On unless turned off; there is nothing else to it.
     @Published var shielded: Bool {
         didSet { store.set(shielded, forKey: "shield") }
+    }
+    /// Settings › Privacy › Prevent cross-site tracking, turned off: WebKit's
+    /// tracking prevention off, as Safari's same switch does (see
+    /// Store.keepsSignIns). On unless turned off.
+    @Published var keepsSignIns: Bool {
+        didSet {
+            store.set(keepsSignIns, forKey: "sites.keep")
+            Store.keepsSignIns = keepsSignIns
+        }
     }
     /// A private tab gets extensions too, not just every other page. Off
     /// unless asked for - a private tab keeps nothing by default, extensions
@@ -126,13 +171,22 @@ final class Preferences: ObservableObject {
         didSet { store.set(welcomed, forKey: "welcomed") }
     }
     /// macOS's own autocorrect, inside web pages: the little "Not ×" that
-    /// capitalises what you meant to leave lower-case. Off unless asked for.
+    /// capitalises what you meant to leave lower-case. As the Mac has it
+    /// (System Settings › Keyboard › Correct spelling automatically) until
+    /// the switch here is used.
     @Published var autocorrect: Bool {
         didSet {
             store.set(autocorrect, forKey: "autocorrect")
             Preferences.tellWebKit(autocorrect: autocorrect)
         }
     }
+    /// How big every site is drawn until it has been zoomed on its own.
+    @Published var pageZoom: Double {
+        didSet { store.set(pageZoom, forKey: "pageZoom") }
+    }
+    /// The stops the setting steps through — every 5%, from as small as
+    /// anyone reads to as big as a page is worth.
+    static let zooms: [Double] = stride(from: 50, through: 300, by: 5).map { Double($0) / 100 }
 
     /// A click of the wheel scrolls the page as on Windows (see AutoScroll.swift).
     /// Off unless asked for.
@@ -150,26 +204,44 @@ final class Preferences: ObservableObject {
             FrameRate.fast = fastPages
         }
     }
-    /// Where a link goes, at the bottom of the page while the pointer is on
-    /// it (see StatusLine.swift). Off unless asked for.
     /// Shift-click on a link opens it in a panel over the page (see
-    /// Peek.swift). Off unless asked for.
+    /// Peek.swift). On unless turned off.
     @Published var peeksLinks: Bool {
         didSet { store.set(peeksLinks, forKey: "links.peek") }
+    }
+    /// A link from another app opens in a small window of its own (see
+    /// Little.swift). Off unless asked for.
+    @Published var littleLinks: Bool {
+        didSet { store.set(littleLinks, forKey: "links.little") }
+    }
+    /// The downloads button always in the chrome, not only while something
+    /// downloads (see Fetching.swift). Off unless asked for.
+    @Published var alwaysShowsDownloads: Bool {
+        didSet { store.set(alwaysShowsDownloads, forKey: "downloads.button") }
     }
     /// The bookmarks bar above the page (see BookmarksBar.swift). Off
     /// unless asked for.
     @Published var bookmarksBar: Bool {
         didSet { store.set(bookmarksBar, forKey: "bookmarks.bar") }
     }
+    /// Where a link goes, at the bottom of the page while the pointer is on
+    /// it (see StatusLine.swift). On unless turned off.
     @Published var showsLinks: Bool {
         didSet {
             store.set(showsLinks, forKey: "links.show")
             HoveredLink.on = showsLinks
         }
     }
+    /// A back or forward swipe held once armed shows the pages that way to
+    /// pick from (see PageView.openList). Off unless asked for.
+    @Published var holdsHistory: Bool {
+        didSet {
+            store.set(holdsHistory, forKey: "swipe.history")
+            PageView.holdsHistory = holdsHistory
+        }
+    }
     /// Two fingers flick the floating video to a corner (see Float.swift).
-    /// Off unless asked for.
+    /// On unless turned off.
     @Published var floatFlicks: Bool {
         didSet {
             store.set(floatFlicks, forKey: "float.flicks")
@@ -181,6 +253,12 @@ final class Preferences: ObservableObject {
     @Published var floatsAway: Bool {
         didSet { store.set(floatsAway, forKey: "float.away") }
     }
+    /// Videos wait for a click instead of starting by themselves, as Safari's
+    /// Never Auto-Play has it (see Web.configuration). Off unless asked for.
+    @Published var waitsForPlay: Bool {
+        didSet { store.set(waitsForPlay, forKey: Preferences.waitsKey) }
+    }
+    nonisolated static let waitsKey = "media.click"
     /// A video playing on a video site comes out into the floating window
     /// when you go to another tab (Browser.leaving). On, as it always was;
     /// the switch is for turning it off.
@@ -188,7 +266,7 @@ final class Preferences: ObservableObject {
         didSet { store.set(floatsOnLeave, forKey: "float.leave") }
     }
     /// A newer build is fetched, checked and put in place on its own, as it
-    /// always was. Off, Search still looks once a day and says so, and waits
+    /// always was. Off, Search still looks every hour and says so, and waits
     /// for Install in Settings (see Updater.installsOnItsOwn).
     @Published var installsUpdates: Bool {
         didSet {
@@ -202,8 +280,19 @@ final class Preferences: ObservableObject {
     @Published var usesSpaces: Bool {
         didSet { store.set(usesSpaces, forKey: "spaces") }
     }
+    /// Named, collapsible sections in the sidebar. Off unless asked for.
+    @Published var usesTabGroups: Bool {
+        didSet { store.set(usesTabGroups, forKey: "tabs.groups") }
+    }
+    /// "settings", "new tab" and the like, typed alone in the address field,
+    /// reach that part of the app instead of asking a search engine for the
+    /// word (see AddressCommands.swift). Off unless asked for.
+    @Published var commandBar: Bool {
+        didSet { store.set(commandBar, forKey: "commandbar") }
+    }
 
     init() {
+        navigationLeft = store.bool(forKey: "toolbar.left")
         // Carried over from when there were four ways of holding the browser
         // and this was one of them.
         // The Mac's own unless asked otherwise — a Mac in dark mode expects
@@ -224,15 +313,23 @@ final class Preferences: ObservableObject {
         NSApplication.shared.appearance = chosen.appearance
         sidebar = store.object(forKey: "sidebar") as? Bool
             ?? (store.string(forKey: "manner") == "side")
+        sidePosition = store.string(forKey: "sidebar.position").flatMap(SidebarPosition.init) ?? .left
         sideHides = store.bool(forKey: "sidebar.hides")
         let width = store.object(forKey: "sidebar.width") as? Double ?? Double(Metrics.side)
         sideWidth = min(Metrics.sideMax, max(Metrics.sideMin, CGFloat(width)))
         glyph = store.string(forKey: "glyph").flatMap(Glyph.init) ?? .letters
         engine = store.string(forKey: "search.engine").flatMap(Engine.init) ?? .standard
         customEngine = store.string(forKey: "search.custom") ?? ""
+        keywords = store.data(forKey: "search.keywords")
+            .flatMap { try? JSONDecoder().decode([Keyword].self, from: $0) } ?? []
         sleepsTabs = store.object(forKey: "tabs.sleep") as? Bool ?? true
+        lazyTabs = store.bool(forKey: "tabs.lazy")
         showsReading = store.object(forKey: "tabs.reading") as? Bool ?? true
         shielded = store.object(forKey: "shield") as? Bool ?? true
+        let keeps = store.bool(forKey: "sites.keep")
+        keepsSignIns = keeps
+        // Before the first page is loaded into the store.
+        Store.keepsSignIns = keeps
         extensionsInPrivate = store.bool(forKey: "extensions.private")
         // Offered by default only in a build that can actually do them —
         // one with Apple's browser entitlement and its profile embedded. A
@@ -264,15 +361,25 @@ final class Preferences: ObservableObject {
         // existed; they are not asked to sit through it.
         welcomed = store.bool(forKey: "welcomed") || store.object(forKey: "glyph") != nil
         usesSpaces = store.bool(forKey: "spaces")
-        let flicks = store.bool(forKey: "float.flicks")
+        usesTabGroups = store.bool(forKey: "tabs.groups")
+        commandBar = store.bool(forKey: "commandbar")
+        let history = store.bool(forKey: "swipe.history")
+        holdsHistory = history
+        PageView.holdsHistory = history
+        // On for everyone who never touched these three switches (Drice,
+        // 27 Sep 2026); a choice made before stands.
+        let flicks = store.object(forKey: "float.flicks") as? Bool ?? true
         floatFlicks = flicks
         Float.flicks = flicks
         floatsAway = store.bool(forKey: "float.away")
         floatsOnLeave = store.object(forKey: "float.leave") as? Bool ?? true
+        waitsForPlay = store.bool(forKey: Preferences.waitsKey)
         installsUpdates = store.object(forKey: Updater.installKey) as? Bool ?? true
-        peeksLinks = store.bool(forKey: "links.peek")
+        peeksLinks = store.object(forKey: "links.peek") as? Bool ?? true
+        littleLinks = store.bool(forKey: "links.little")
         bookmarksBar = store.bool(forKey: "bookmarks.bar")
-        let links = store.bool(forKey: "links.show")
+        alwaysShowsDownloads = store.bool(forKey: "downloads.button")
+        let links = store.object(forKey: "links.show") as? Bool ?? true
         showsLinks = links
         HoveredLink.on = links
         let scrolls = store.bool(forKey: "autoscroll")
@@ -284,10 +391,12 @@ final class Preferences: ObservableObject {
         // Left behind by the Web Inspector's switch, from before it was
         // always there.
         store.removeObject(forKey: "inspector")
-        let corrects = store.bool(forKey: "autocorrect")
+        let corrects = store.object(forKey: "autocorrect") as? Bool
+            ?? NSSpellChecker.isAutomaticSpellingCorrectionEnabled
         autocorrect = corrects
         // Before the first web view exists: WebKit reads these once.
         Preferences.tellWebKit(autocorrect: corrects)
+        pageZoom = store.object(forKey: "pageZoom") as? Double ?? 1
         // Left behind by an assistant this browser no longer has.
         for key in ["mind.model", "mind.effort", "mind.acting", "mind.width", "mind.open"] {
             store.removeObject(forKey: key)

@@ -20,6 +20,7 @@ with log.open('w') as output:
         else: raise RuntimeError('Test interface did not start: ' + log.read_text())
         subprocess.run(['python3', 'Tests/run_appearance_ui_tests.py'], cwd=root, env=env, check=True, timeout=180)
         subprocess.run(['python3', 'Tests/run_folder_ui_tests.py'], cwd=root, env=env, check=True, timeout=180)
+        subprocess.run(['python3', 'Tests/run_search104_ui_tests.py'], cwd=root, env=env, check=True, timeout=180)
         app.terminate(); app.wait(timeout=10)
         if sock.exists(): sock.unlink()
         app = subprocess.Popen([str(root/'build/Search Mod Preview.app/Contents/MacOS/SearchModPreview')], cwd=root, env=env, stdout=output, stderr=subprocess.STDOUT)
@@ -29,6 +30,7 @@ with log.open('w') as output:
             time.sleep(.25)
         else: raise RuntimeError('Test interface did not restart')
         subprocess.run(['python3', 'Tests/run_folder_ui_tests.py', '--restored'], cwd=root, env=env, check=True, timeout=60)
+        subprocess.run(['python3', 'Tests/run_search104_ui_tests.py', '--restored'], cwd=root, env=env, check=True, timeout=60)
     finally:
         app.terminate()
         try: app.wait(timeout=10)

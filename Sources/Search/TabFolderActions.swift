@@ -4,7 +4,8 @@ import UniformTypeIdentifiers
 extension Browser {
     var folderTabs: [Tab] {
         guard AppearanceMods.shared.usesSidebarFolders else { return tabs }
-        return tabs.filter { $0.folderID == active?.folderID }
+        let selected = tabFolders.valid(active?.folderID, in: spaceID)
+        return tabs.filter { tabFolders.valid($0.folderID, in: spaceID) == selected }
     }
     func folderAction(_ action: () throws -> Void) {
         do { try action() } catch { announce(error.localizedDescription) }
@@ -46,12 +47,15 @@ extension Browser {
     func removeFolder(_ id: UUID) throws {
         guard tabFolders.valid(id, in: spaceID) != nil else { return }
         try tabFolders.remove(id)
-        for tab in tabs where tab.folderID == id { tab.folderID = nil }
-        writeSession(now: true)
+        for browser in Browsers.all {
+            for tab in browser.tabs + browser.parkedTabs where tab.folderID == id { tab.folderID = nil }
+            browser.objectWillChange.send()
+            browser.flushSession()
+        }
     }
     func newTab(inFolder id: UUID) {
         guard tabFolders.valid(id, in: spaceID) != nil else { return }
-        let tab = Tab()
+        let tab = Tab(configuration: Web.configuration(space: spaceID))
         tab.folderID = id
         prepare(tab); insert(tab, at: tabs.count); select(tab)
         folderAction { try tabFolders.collapse(id, false) }
@@ -89,7 +93,7 @@ extension Browser {
     func exportFolders() throws -> Data {
         let groups = tabFolders.folders(in: spaceID).map { folder in
             ImportedTabFolder(name: folder.name, tabs: tabs.compactMap { tab in
-                guard tab.folderID == folder.id, !tab.shy, !tab.bench,
+                guard tab.folderID == folder.id, !tab.shy, !tab.bench, tab.held == nil,
                       let url = tab.pending ?? tab.address,
                       ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return nil }
                 return .init(title: tab.label, url: url.absoluteString)

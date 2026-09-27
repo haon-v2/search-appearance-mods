@@ -52,6 +52,9 @@ BINARY=".build/$CONFIG/Search"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINARY" "$APP/Contents/MacOS/$NAME"
+# The AppleScript dictionary (Scripting.swift): read-only, tabs' addresses
+# and titles. The plist below points to it.
+cp Search.sdef "$APP/Contents/Resources/"
 
 # Symbols stay out of the app. The linker leaves every function's name and a
 # map back to the source in the binary — 15,000 entries, more than half of
@@ -68,10 +71,36 @@ fi
 # The icon, drawn fresh each time — it is thirty lines of Swift, not an asset
 # to keep in step with anything.
 ICONSET="build/AppIcon.iconset"
-rm -rf "$ICONSET"
-swift Icon/icon.swift "$ICONSET" > /dev/null
+ICONDOC="build/AppIcon.icon"
+rm -rf "$ICONSET" "$ICONDOC"
+swift Icon/icon.swift "$ICONSET" "$ICONDOC" > /dev/null
 iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
 rm -rf "$ICONSET"
+# macOS 26's Dark, Clear and Tinted Dock styles read the icon from an asset
+# catalog compiled from the Icon Composer document; without one the Dock
+# darkens the flat image and the mark goes black on black (#337). actool
+# comes with Xcode 26 — with anything older, or only the command-line tools,
+# the app keeps the .icns alone, as before. Only Assets.car is kept, not
+# actool's own .icns: the one above goes on being the disk image's icon and
+# the fallback. (macOS 14 and 15 show the flat pictures actool puts in
+# Assets.car, drawn from the same document: the same mark, to within a
+# pixel, on a plate with Apple's own corners.)
+ICONNAME=""
+ICONCAR="build/AppIcon.car"
+rm -rf "$ICONCAR"
+mkdir -p "$ICONCAR"
+# Full paths: actool hands the document to a helper that runs elsewhere, and
+# with "build/…" it finds nothing ("Icon export exited with status 255").
+if xcrun actool "$PWD/$ICONDOC" --compile "$PWD/$ICONCAR" --platform macosx \
+     --minimum-deployment-target "$MINIMUM" --app-icon AppIcon \
+     --output-partial-info-plist "$PWD/$ICONCAR/partial.plist" > /dev/null 2>&1 \
+   && [ -f "$ICONCAR/Assets.car" ]; then
+  cp "$ICONCAR/Assets.car" "$APP/Contents/Resources/Assets.car"
+  ICONNAME="<key>CFBundleIconName</key><string>AppIcon</string>"
+else
+  echo "note: actool from Xcode 26 didn't compile the icon — no Dark or Tinted style this time" >&2
+fi
+rm -rf "$ICONCAR" "$ICONDOC"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -86,10 +115,13 @@ cat > "$APP/Contents/Info.plist" <<PLIST
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$BUILD</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
+  $ICONNAME
   <key>LSMinimumSystemVersion</key><string>$MINIMUM</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHumanReadableCopyright</key><string>© Office Commun · Search</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>NSAppleScriptEnabled</key><true/>
+  <key>OSAScriptingDefinition</key><string>Search.sdef</string>
   <!-- Owning http and https is what sends a link clicked in Mail here.
        Appearing in Desktop & Dock → Default web browser also needs the
        XHTML document type below. -->
@@ -158,7 +190,10 @@ if [ -n "$IDENTITY" ]; then
     --sign "$IDENTITY" "$APP"
   echo "signed as: $IDENTITY"
 else
-  codesign --force --deep --sign - "$APP" 2>/dev/null || true
+  # A build that cannot sign at all is not a build: `|| true` here let one
+  # through as though it had finished, leaving a bundle that would not open.
+  # set -e stops it now, with codesign's own words above.
+  codesign --force --deep --sign - "$APP"
   [ "$STEP" != "app" ] && echo "no Developer ID certificate found — the DMG will only open on this Mac" >&2
 fi
 
@@ -209,6 +244,8 @@ echo "packed: $ZIP"
 
 # What the updater reads. The first paragraph of NOTES.md, with the two
 # characters JSON minds escaped, is the line under the version in Settings.
+# Written last — after notarisation has stapled its ticket to the DMG, which
+# changes it — so the DMG's hash is the one people download.
 BASE="${SEARCH_DOWNLOAD_URL:-https://officecommun.com/search}"
 BASE="${BASE%/}"
 NOTES=""
@@ -216,19 +253,38 @@ if [ -f NOTES.md ]; then
   NOTES="$(awk 'NF { printf "%s%s", (n++ ? " " : ""), $0; next } n { exit }' NOTES.md \
     | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
 fi
-cat > build/appcast.json <<JSON
+write_appcast() {
+  local DMGSHA
+  DMGSHA="$(shasum -a 256 "$DMG" | cut -d' ' -f1)"
+  cat > build/appcast.json <<JSON
 {
   "version": "$VERSION",
   "build": $BUILD,
   "url": "$BASE/$NAME.zip",
   "dmg": "$BASE/$NAME.dmg",
   "sha256": "$SHA",
+  "dmgSha256": "$DMGSHA",
   "notes": "$NOTES",
   "minimumSystemVersion": "$MINIMUM"
 }
 JSON
-echo "wrote: build/appcast.json ($VERSION, build $BUILD)"
-[ "$STEP" = "dmg" ] && exit 0
+  echo "wrote: build/appcast.json ($VERSION, build $BUILD)"
+  # The same file, signed with the Developer ID that signs the app (codesign
+  # keeps the signature in the file's extended attributes, ditto carries them
+  # in the ZIP). Builds from 1.0.4 read only this one; older ones read the
+  # plain file beside it. No key of its own to keep, or to lose.
+  rm -f build/appcast.json.zip
+  if [ -n "$IDENTITY" ]; then
+    local SIGNED
+    SIGNED="$(mktemp -d)"
+    cp build/appcast.json "$SIGNED/appcast.json"
+    codesign --force --timestamp --sign "$IDENTITY" --identifier com.officecommun.search.appcast "$SIGNED/appcast.json"
+    ditto -c -k --sequesterRsrc "$SIGNED/appcast.json" build/appcast.json.zip
+    rm -rf "$SIGNED"
+    echo "signed: build/appcast.json.zip"
+  fi
+}
+if [ "$STEP" = "dmg" ]; then write_appcast; exit 0; fi
 
 # Notarisation: Apple looks both over. The ticket is stapled to the image,
 # so it opens on a Mac that has never seen this app and is offline; the ZIP
@@ -238,4 +294,5 @@ for FILE in "$DMG" "$ZIP"; do
   xcrun notarytool submit "$FILE" --keychain-profile "${SEARCH_NOTARY_PROFILE:-search}" --wait
 done
 xcrun stapler staple "$DMG"
-echo "shipped: $DMG, $ZIP and build/appcast.json — ./publish.sh <folder> puts them on the site"
+write_appcast
+echo "shipped: $DMG, $ZIP, build/appcast.json and its signed ZIP — ./publish.sh <folder> puts them on the site"

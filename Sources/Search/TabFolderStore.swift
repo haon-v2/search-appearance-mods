@@ -11,6 +11,7 @@ struct TabFolder: Codable, Identifiable, Equatable {
 }
 
 @MainActor final class TabFolderStore: ObservableObject {
+    static let shared = TabFolderStore()
     @Published private(set) var items: [TabFolder] = []
     let file: URL
     init(file: URL = Store.file("tab-folders.json")) {

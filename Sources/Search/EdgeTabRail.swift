@@ -98,7 +98,8 @@ struct EdgeRailChrome: View {
         .padding(.leading, Metrics.lights)
       }
     }
-    .padding(.leading, browser.prefs.sidebar ? browser.prefs.sideWidth : 0)
+    .padding(.leading, browser.prefs.sidebar && browser.prefs.sidePosition != .right ? browser.prefs.sideWidth : 0)
+    .padding(.trailing, browser.prefs.sidebar && browser.prefs.sidePosition == .right ? browser.prefs.sideWidth : 0)
     .onDrop(of: [.url, .text], isTargeted: nil) { browser.take($0) }
   }
 }

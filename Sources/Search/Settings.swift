@@ -12,16 +12,19 @@ struct SettingsPanel: View {
     @ObservedObject private var updater = Updater.shared
     @ObservedObject private var shield = Shield.shared
     @State private var isDefault = Links.isDefault
+    /// A site shortcut being written, kept out of Preferences until it's saved.
+    @State private var draft: Keyword?
     @State private var page: Page = Page(rawValue: Store.settings.string(forKey: "settings.page") ?? "") ?? .general
 
     enum Page: String, CaseIterable, Identifiable {
-        case general, appearance, tabs, extensions, passwords, downloads, privacy, about
+        case general, appearance, tabs, shortcuts, extensions, passwords, downloads, privacy, about
         var id: String { rawValue }
         var title: String {
             switch self {
             case .general: return "General"
             case .appearance: return "Appearance"
             case .tabs: return "Tabs"
+            case .shortcuts: return "Shortcuts"
             case .extensions: return "Extensions"
             case .passwords: return "Passwords"
             case .downloads: return "Downloads"
@@ -34,6 +37,7 @@ struct SettingsPanel: View {
             case .general: return "macwindow"
             case .appearance: return "paintpalette"
             case .tabs: return "rectangle.split.3x1"
+            case .shortcuts: return "keyboard"
             case .extensions: return "puzzlepiece.extension"
             case .passwords: return "key"
             case .downloads: return "arrow.down.circle"
@@ -82,7 +86,7 @@ struct SettingsPanel: View {
         .padding(8)
         .frame(width: SettingsPanel.rail, alignment: .leading)
         .frame(maxHeight: .infinity, alignment: .top)
-        .background(Palette.wash.opacity(0.45))
+        .background(Palette.wash.opacity(0.45), in: Rectangle())
     }
 
     private struct PageRow: View {
@@ -135,7 +139,10 @@ struct SettingsPanel: View {
                     switch page {
                     case .general: general
                     case .appearance: AppearanceModsPage(browser: browser)
-                    case .tabs: tabs
+                    case .tabs:
+                        tabs
+                        if !prefs.sidebar { toolbar }
+                    case .shortcuts: ShortcutsPage(browser: browser, store: .shared)
                     case .extensions: ExtensionsPage(browser: browser)
                     case .passwords: passwords
                     case .downloads: downloads
@@ -175,6 +182,15 @@ struct SettingsPanel: View {
                 }
             }
             Rule()
+            // Coming from another browser, now or any time later: the same
+            // sheet as File › Bring Things Over… and the Welcome's.
+            Line("Bring things over", "Bookmarks, history, passwords and extensions from another browser on this Mac, or from a file it exported") {
+                Pill("Bring Things Over…") {
+                    browser.tuning = false
+                    browser.bringingIn = ""
+                }
+            }
+            Rule()
             Line("Search with", searchDetail) {
                 Picker("", selection: $prefs.engine) {
                     ForEach(Engine.allCases) { engine in
@@ -203,8 +219,75 @@ struct SettingsPanel: View {
                 .padding(.bottom, 11)
             }
             Rule()
+            Line("Site shortcuts", keywordDetail) {
+                if draft == nil {
+                    Pill("Add") { draft = Keyword() }
+                } else {
+                    HStack(spacing: 6) {
+                        Pill("Cancel") { draft = nil }
+                        Pill("Save", filled: true) { saveDraft() }
+                            .disabled(draftProblem != nil)
+                            .opacity(draftProblem == nil ? 1 : 0.4)
+                    }
+                }
+            }
+            if let current = draft {
+                HStack(spacing: 8) {
+                    TextField("yt", text: Binding(
+                        get: { current.keyword },
+                        set: { draft?.keyword = $0 }
+                    ))
+                    .textFieldStyle(.plain)
+                    .frame(width: 50)
+                    Text("→").foregroundStyle(Palette.muted)
+                    TextField("https://www.youtube.com/results?search_query=%s", text: Binding(
+                        get: { current.template },
+                        set: { draft?.template = $0 }
+                    ))
+                    .textFieldStyle(.plain)
+                    .onSubmit(saveDraft)
+                }
+                .font(.system(size: 12.5))
+                .foregroundStyle(Palette.ink)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .padding(.horizontal, 14)
+                .padding(.bottom, 6)
+            }
+            ForEach(prefs.keywords) { entry in
+                HStack(spacing: 8) {
+                    Text(entry.keyword)
+                        .frame(width: 50, alignment: .leading)
+                    Text("→").foregroundStyle(Palette.muted)
+                    Text(entry.template)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        prefs.keywords.removeAll { $0.id == entry.id }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(Palette.faint)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .font(.system(size: 12.5))
+                .foregroundStyle(Palette.ink)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .background(Palette.wash, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .padding(.horizontal, 14)
+                .padding(.bottom, 6)
+            }
+            Rule()
             Line("Appearance", "Light, dark, or whatever the Mac is doing — pages follow it too") {
                 Segmented(options: Look.allCases.map { ($0, $0.title) }, selection: $prefs.look)
+            }
+            Rule()
+            Line("Page zoom", "Where every site starts. ⌘+ and ⌘− are still remembered for each site.") {
+                // The number itself takes it back to 100%.
+                Steps(stops: Preferences.zooms, value: $prefs.pageZoom, home: 1) { "\(Int(($0 * 100).rounded()))%" }
             }
             Rule()
             Line("Correct spelling as you type", "macOS's autocorrect inside pages — the one that capitalises for you") {
@@ -213,6 +296,14 @@ struct SettingsPanel: View {
             Rule()
             Line("Peek at a link with a shift-click", "Its page opens in a panel over the one you're reading. Escape puts it away; the other button keeps it as a tab") {
                 Switch(on: $prefs.peeksLinks)
+            }
+            Rule()
+            Line("Open links from other apps in a small window", "To read and close, or keep with Open in Search (⌘O)") {
+                Switch(on: $prefs.littleLinks)
+            }
+            Rule()
+            Line("Address bar commands", "A word like \"settings\" or \"new tab\", typed alone in the address field, goes there instead of searching for it") {
+                Switch(on: $prefs.commandBar)
             }
             Rule()
             Line("Show where links go", "Point at a link and its address shows at the bottom of the page") {
@@ -227,8 +318,16 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.fastPages)
             }
             Rule()
-            Line("Flick the floating video to a corner", "Two fingers on it send it to the corner or edge they point at, instead of pushing it along. Dragging still puts it anywhere") {
+            Line("Hold a swipe to pick from history", "Swipe back or forward and keep your fingers down: the pages that way appear, and moving up or down picks one to go to") {
+                Switch(on: $prefs.holdsHistory)
+            }
+            Rule()
+            Line("Flick the floating video to a corner", "Two fingers on it send it to the corner or edge they point at, instead of pushing it along; a strong swipe at the side of the screen it is against tucks it in there, a sliver left to bring it back by. Dragging still puts it anywhere") {
                 Switch(on: $prefs.floatFlicks)
+            }
+            Rule()
+            Line("Videos wait for a click", "Videos don't start by themselves, even without sound; they play when you press play. Tabs already open follow once closed and opened again, or after they've slept") {
+                Switch(on: $prefs.waitsForPlay)
             }
             Rule()
             Line("Float the video when you switch tabs", "A video playing on YouTube and the like comes out into its floating window when you go to another tab, and back when you return. ⇧⌘P still floats one by hand") {
@@ -245,6 +344,32 @@ struct SettingsPanel: View {
         }
     }
 
+    /// Checked when it's saved, not as it's typed into the list: a shortcut
+    /// only exists once its address is one it's safe to send words to.
+    private var draftProblem: String? {
+        guard let draft else { return nil }
+        return Keyword.problem(word: draft.keyword, template: draft.template, among: prefs.keywords)
+    }
+
+    private var keywordDetail: String {
+        guard let draft else {
+            return "A word before your search goes straight to that site, whatever engine you've picked — \"yt cats\" to YouTube"
+        }
+        if draft.keyword.isEmpty, draft.template.isEmpty {
+            return "A word, then the site's search address with %s where the words go"
+        }
+        return draftProblem ?? "\(draft.keyword.trimmingCharacters(in: .whitespacesAndNewlines)) will search \(draft.name)"
+    }
+
+    private func saveDraft() {
+        guard let current = draft, draftProblem == nil else { return }
+        prefs.keywords.append(Keyword(
+            keyword: current.keyword.trimmingCharacters(in: .whitespacesAndNewlines),
+            template: current.template.trimmingCharacters(in: .whitespacesAndNewlines)
+        ))
+        draft = nil
+    }
+
     private var searchDetail: String {
         guard prefs.engine == .custom else { return "Where words that aren't an address go" }
         guard Engine.accepts(prefs.customEngine) else {
@@ -255,9 +380,20 @@ struct SettingsPanel: View {
 
     // MARK: - tabs
 
+    /// Where back, forward and reload sit with the tabs across the top. With
+    /// the sidebar they are already beside the window's buttons: nothing to
+    /// move, and the line isn't shown.
+    private var toolbar: some View {
+        Card {
+            Line("Back, forward and reload on the left", "Beside the window's buttons, before the tabs") {
+                Switch(on: $prefs.navigationLeft)
+            }
+        }
+    }
+
     private var tabs: some View {
         Card {
-            Line("Tabs in a sidebar", "Down the left instead of across the top. Pull its edge to make it wider; double-click the edge to reset.") {
+            Line("Tabs in a sidebar", "Down the \(prefs.sidePosition.rawValue) instead of across the top. Pull its edge to make it wider; double-click the edge to reset.") {
                 Switch(on: Binding(
                     get: { prefs.sidebar },
                     set: { on in withAnimation(Motion.glide) { prefs.sidebar = on } }
@@ -265,7 +401,11 @@ struct SettingsPanel: View {
             }
             if prefs.sidebar {
                 Rule()
-                Line("Hide the sidebar until the pointer reaches the edge", "The page takes the whole window; push against its left edge for the tabs. ⌘S keeps them out.") {
+                Line("Sidebar position", "Tabs down the \(prefs.sidePosition.rawValue) edge of the window") {
+                    Segmented(options: SidebarPosition.allCases.map { ($0, $0.title) }, selection: $prefs.sidePosition)
+                }
+                Rule()
+                Line("Hide the sidebar until the pointer reaches the edge", "The page takes the whole window; push against its \(prefs.sidePosition.rawValue) edge for the tabs. ⌘S keeps them out.") {
                     Switch(on: $prefs.sideHides)
                 }
             }
@@ -286,8 +426,16 @@ struct SettingsPanel: View {
                 Switch(on: $prefs.sleepsTabs)
             }
             Rule()
+            Line("Load background tabs when you go to them", "A link opened behind the page, with ⌘-click or the middle button, or a batch of links from another app, waits until you go to its tab. ⇧⌘-click still takes you there at once.") {
+                Switch(on: $prefs.lazyTabs)
+            }
+            Rule()
             Line("Spaces", "Separate sets of tabs, signed in where the others are or starting afresh, switched with ⌃1–⌃9, two fingers sideways over the column, or the space's icon. Mission Control's own ⌃1–⌃9, if you turned them on, take those keys first.") {
                 Switch(on: $prefs.usesSpaces)
+            }
+            Rule()
+            Line("Tab groups", "Named sections in the sidebar. Right-click a tab to start a group; click its heading to hide or show its tabs.") {
+                Switch(on: $prefs.usesTabGroups)
             }
         }
     }
@@ -341,10 +489,10 @@ struct SettingsPanel: View {
                 }
             }
             Card {
-                Line("Bring yours in", "From Dia, Chrome, Arc, Brave or Edge on this Mac — nothing leaves it") {
+                Line("Bring yours in", "From another browser on this Mac — nothing leaves it") {
                     Pill("Import…") {
                         browser.tuning = false
-                        browser.managing = true
+                        browser.bringingIn = ""
                     }
                 }
             }
@@ -361,6 +509,10 @@ struct SettingsPanel: View {
             Rule()
             Line("Ask where to save each file") {
                 Switch(on: $prefs.asksWhereToSave)
+            }
+            Rule()
+            Line("Always show the downloads button", "Beside the other buttons, even with nothing downloading. Off, it shows only while a file comes in") {
+                Switch(on: $prefs.alwaysShowsDownloads)
             }
         }
     }
@@ -390,6 +542,10 @@ struct SettingsPanel: View {
                             }
                         ))
                     }
+                }
+                Rule()
+                Line("Prevent cross-site tracking", "As in Safari. Off, sites you rarely open keep their sign-ins, and trackers inside other sites can follow you across them again, as in Chrome. Private tabs keep it on") {
+                    Switch(on: Binding(get: { !prefs.keepsSignIns }, set: { prefs.keepsSignIns = !$0 }))
                 }
                 Rule()
                 Line("Camera and microphone", "What each site was allowed or refused") {
@@ -438,13 +594,18 @@ struct SettingsPanel: View {
                 Card {
                     Line(versionTitle, versionDetail) { versionControl }
                     Rule()
-                    Line("Install updates on its own", "Off, Search still looks once a day and tells you, and installs only when you press Install") {
+                    Line("Install updates on its own", "Off, Search still looks every hour and tells you, and installs only when you press Install") {
                         Switch(on: $prefs.installsUpdates)
                     }
                     Rule()
                     Line("Found something wrong?", "Opens a draft with the version already in it") {
                         Pill("Send Feedback") { Links.writeFeedback() }
                     }
+                }
+            }
+            Card {
+                Line("What's new", "Every version's notes, newest first") {
+                    Pill("What's New…") { browser.notesShowing = true }
                 }
             }
 
@@ -457,6 +618,8 @@ struct SettingsPanel: View {
                 Rule()
                 Shortcut("⇧⌘V", "Paste and go")
                 Rule()
+                Shortcut("⇧⌘C", "Copy address")
+                Rule()
                 Shortcut("⌃⇥  ⌘1–9", "Next tab, a tab by its place")
                 Rule()
                 Shortcut("⇧⌘S", "Tabs in a sidebar")
@@ -468,6 +631,8 @@ struct SettingsPanel: View {
                 Shortcut("⇧⌘H", "Hide something on this site")
                 Rule()
                 Shortcut("⇧⌘P", "Float the video")
+                Rule()
+                Shortcut("⇧⌘⌫", "Clear browsing data")
             }
         }
     }
@@ -486,8 +651,8 @@ struct SettingsPanel: View {
     private var versionDetail: String {
         switch updater.stage {
         case .none:
-            return updater.lastChecked.map { "Checked \($0.formatted(.relative(presentation: .named))) — once a day on its own" }
-                ?? "Checked once a day on its own"
+            return updater.lastChecked.map { "Checked \($0.formatted(.relative(presentation: .named))) — every hour on its own" }
+                ?? "Checked every hour on its own"
         case .fetching(let next):
             return next.notes ?? "Quietly, in the background — nothing you have set is touched"
         case .ready(let next):
@@ -513,11 +678,9 @@ struct SettingsPanel: View {
             Ring(size: 12)
         case .ready:
             Pill("Relaunch now", filled: true) { updater.relaunch() }
-        case .offered(let next):
-            Pill("Download", filled: true) {
-                browser.tuning = false
-                browser.open(next.dmg, foreground: true)
-            }
+        case .offered:
+            Pill(updater.fetchingDisk ? "Downloading…" : "Download", filled: true) { updater.openDisk() }
+                .disabled(updater.fetchingDisk)
         case .waiting:
             Pill("Install", filled: true) { updater.install() }
         }
@@ -619,6 +782,63 @@ struct Switch: View {
             .contentShape(Capsule())
             .onTapGesture { withAnimation(Motion.settle) { on.toggle() } }
             .animation(Motion.settle, value: on)
+    }
+}
+
+/// A value moved one stop at a time: − and + either side of it, in the same
+/// outlined capsule as a pill. Pressing the value itself takes it home.
+struct Steps: View {
+    let stops: [Double]
+    @Binding var value: Double
+    let home: Double
+    let label: (Double) -> String
+
+    /// The nearest stop either way — a value between stops, from before
+    /// there were stops, still moves to a round one.
+    private var below: Double? { stops.last { $0 < value - 0.001 } }
+    private var above: Double? { stops.first { $0 > value + 0.001 } }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            Step(icon: "minus", to: below) { value = $0 }
+            Button { value = home } label: {
+                Text(label(value))
+                    .font(.system(size: 11.5))
+                    .monospacedDigit()
+                    .foregroundStyle(Palette.ink)
+                    .frame(minWidth: 36)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Back to \(label(home))")
+            Step(icon: "plus", to: above) { value = $0 }
+        }
+        .padding(.horizontal, 2)
+        .frame(height: 24)
+        .background(Palette.ground, in: Capsule())
+        .overlay(Capsule().strokeBorder(Palette.hairline, lineWidth: 1))
+    }
+
+    private struct Step: View {
+        let icon: String
+        let to: Double?
+        let act: (Double) -> Void
+        @State private var hovering = false
+
+        var body: some View {
+            Button { if let to { act(to) } } label: {
+                Image(systemName: icon)
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(to == nil ? Palette.faint : Palette.ink)
+                    .frame(width: 20, height: 20)
+                    .background(hovering && to != nil ? Palette.hover : .clear, in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(to == nil)
+            .onHover { hovering = $0 }
+            .animation(Motion.quick, value: hovering)
+        }
     }
 }
 

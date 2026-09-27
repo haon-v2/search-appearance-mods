@@ -80,9 +80,9 @@ enum ExtensionShims {
         }
 
         // The background, whichever kind it is, gets the shim first. A
-        // service worker gets it written at the top of its own file: that
-        // holds whether WebKit runs it as a worker or as a page, as a classic
-        // script or a module, where a wrapper importing it would not.
+        // classic service worker gets it written at the top of its own file;
+        // a module one imports it first, as its imports run before anything
+        // written above them.
         if var background = manifest["background"] as? [String: Any] {
             // A manifest is not a way out of its own package: a worker path
             // that resolves outside the folder, or is a link, is left alone.
@@ -100,7 +100,10 @@ enum ExtensionShims {
                     while source.hasPrefix(marker), let end = source.range(of: "\n})();\n") {
                         source = String(source[end.upperBound...])
                     }
-                    try (marker + "\n" + script + "\n" + ender + "\n" + source).write(to: path, atomically: true, encoding: .utf8)
+                    let first = "import \"/\(file)\";\n"
+                    while source.hasPrefix(first) { source.removeFirst(first.count) }
+                    let module = (background["type"] as? String) == "module"
+                    try (module ? first + source : marker + "\n" + script + "\n" + ender + "\n" + source).write(to: path, atomically: true, encoding: .utf8)
                 }
             }
             // Scripts, alone or beside a worker — WebKit runs them as a page
@@ -112,7 +115,7 @@ enum ExtensionShims {
             manifest["background"] = background
         }
 
-        // Content scripts too — there only the sendMessage mend applies. One
+        // Content scripts too — there only Chrome's behaviour is mended. One
         // that runs in the page's own world has Search's passkey patch before
         // it: a password manager's there keeps a reference to
         // navigator.credentials as it finds it, and that has to be Search's,
@@ -156,7 +159,7 @@ enum ExtensionShims {
     /// read through it and written back over it as a regular file, so a
     /// link to a file elsewhere would put that file's bytes in the package.
     /// A folder on the way that is a link is caught by where it resolves.
-    nonisolated static func inside(_ name: String, of folder: URL) -> URL? {
+    nonisolated private static func inside(_ name: String, of folder: URL) -> URL? {
         let path = folder.appendingPathComponent(name.trimmingCharacters(in: CharacterSet(charactersIn: "/"))).standardizedFileURL
         guard path.path.hasPrefix(folder.standardizedFileURL.path + "/"),
               (try? path.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) != true,
@@ -218,6 +221,13 @@ enum ExtensionShims {
       // (There, Search's passkey patch holds navigator.credentials.)
       const ours = (() => { try { return !!(chrome && chrome.runtime && chrome.runtime.id); } catch (e) { return false; } })();
       if (!ours || root.__searchShim) return;
+      // Bitwarden's bundled TypeScript uses these as computed class keys
+      // before it registers disposable resources. Define them before any
+      // extension code runs; Symbol.for keeps the key shared by its frames.
+      const symbol = root.Symbol;
+      for (const name of ["dispose", "asyncDispose"]) {
+        if (symbol[name] === undefined) Object.defineProperty(symbol, name, { value: symbol.for("Symbol." + name) });
+      }
       // WebKit reverted `requestIdleCallback` after a page-load regression
       // (bug 287681), leaving Proton Pass's form detection without it.
       const nativeIdle = typeof root.requestIdleCallback === "function"
@@ -351,6 +361,15 @@ enum ExtensionShims {
         if (!callback) return promise;
         promise.then((value) => callback(value), (error) => withLastError(error, callback));
       };
+      // Where a tab is, as Search can find it: its place in its window's row
+      // and that window's frame. WebKit's window numbers mean nothing to
+      // Search, and windows.getAll gives the frames they go with.
+      const frames = async () => {
+        const all = chrome.windows && typeof chrome.windows.getAll === "function"
+          ? await Promise.resolve(chrome.windows.getAll()).catch(() => []) : [];
+        return new Map((all || []).map((w) => [w.id, { left: w.left, top: w.top, width: w.width, height: w.height }]));
+      };
+      const placeOf = (t, known) => ({ i: t.index, w: known.get(t.windowId) });
       const event = () => {
         const listeners = new Set();
         return {
@@ -382,6 +401,87 @@ enum ExtensionShims {
       // event.addRoutes) — a speed-up, so nothing is lost without it.
       if (worker && typeof root.InstallEvent === "function" && !InstallEvent.prototype.addRoutes) {
         InstallEvent.prototype.addRoutes = () => Promise.resolve();
+      }
+      // clients.matchAll() in an extension's worker: Chrome lists the
+      // extension's own pages that are open — its popup, its pages in tabs.
+      // WebKit lists none, so an extension that checks whether its popup is
+      // open before sending it news always hears no: 1Password's popup
+      // stays on "connecting to the app" for ever, the answer from the app
+      // never passed on. The browser knows which pages are open, so they
+      // are added to the list; a message posted to one reaches it through
+      // a channel the pages listen on, as a message from the worker.
+      // The other way round, a page reaches the worker through
+      // navigator.serviceWorker, and the worker answers the page a message
+      // came from — ScriptCat's worker hands each GM_xmlhttpRequest to its
+      // offscreen document so. Here no worker controls the extension's
+      // pages, so a page is given one that posts to the worker over the same
+      // channel, and a message either way says who sent it. A port handed
+      // over with a message can't cross the channel: it stays with the
+      // sender, and what is posted to the one the other side is given comes
+      // back over the channel to it.
+      const clientsChannel = typeof BroadcastChannel === "function" && !inContent && !embedded ? new BroadcastChannel("search-clients") : null;
+      const heldPorts = new Map();
+      const handOver = (transfer) => (Array.isArray(transfer) ? transfer : (transfer && transfer.transfer) || [])
+        .filter((p) => p instanceof MessagePort)
+        .map((port) => { const key = Math.random().toString(36).slice(2); heldPorts.set(key, port); return key; });
+      const answered = (data) => {
+        if (typeof data.port !== "string") return false;
+        const port = heldPorts.get(data.port);
+        if (port) port.postMessage(data.data);
+        return true;
+      };
+      const messageFrom = (source, data, keys) => {
+        const ports = (Array.isArray(keys) ? keys : []).map((key) => {
+          const pair = new MessageChannel();
+          pair.port1.onmessage = (e) => clientsChannel.postMessage({ port: key, data: e.data });
+          return pair.port2;
+        });
+        const event = new MessageEvent("message", { data, ports, origin: location.origin });
+        if (source) Object.defineProperty(event, "source", { value: source });
+        return event;
+      };
+      if (worker && clientsChannel && root.clients && typeof root.clients.matchAll === "function") {
+        const matchAll = root.clients.matchAll.bind(root.clients);
+        const client = (p) => ({
+          id: "search-" + p.id, url: p.url, type: "window", frameType: "top-level",
+          visibilityState: p.visible ? "visible" : "hidden", focused: !!p.focused,
+          postMessage: (data, transfer) => { try { clientsChannel.postMessage({ url: p.url, data, ports: handOver(transfer) }); } catch (e) {} },
+          focus() { return Promise.resolve(this); },
+          navigate: () => Promise.resolve(null),
+        });
+        put(root.clients, "matchAll", async (options) => {
+          const found = [...await matchAll(options)];
+          const type = (options && options.type) || "window";
+          if (type !== "window" && type !== "all") return found;
+          let pages = [];
+          try { pages = (await native("clients.pages", [])) || []; } catch (e) {}
+          const listed = new Set(found.map((c) => c.url));
+          return found.concat(pages.filter((p) => p && typeof p.url === "string" && !listed.has(p.url)).map(client));
+        });
+        clientsChannel.onmessage = ({ data }) => {
+          if (!data || answered(data) || typeof data.from !== "string") return;
+          root.dispatchEvent(messageFrom(client({ id: data.from, url: data.from }), data.data, data.ports));
+        };
+      } else if (clientsChannel && !background && typeof navigator !== "undefined" && navigator.serviceWorker) {
+        const container = navigator.serviceWorker;
+        const script = (() => { try { return (runtime.getManifest().background || {}).service_worker; } catch (e) { return null; } })();
+        const controller = script && !container.controller ? {
+          scriptURL: new URL(script, location.origin + "/").href, state: "activated", onstatechange: null, onerror: null,
+          postMessage: (data, transfer) => { try { clientsChannel.postMessage({ from: location.href, data, ports: handOver(transfer) }); } catch (e) {} },
+          addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => true,
+        } : null;
+        clientsChannel.onmessage = ({ data }) => {
+          if (!data || answered(data) || data.url !== location.href) return;
+          try { container.dispatchEvent(messageFrom(controller, data.data, data.ports)); } catch (e) {}
+        };
+        // Only the controller: `ready` is left as WebKit has it, since a
+        // made-up registration has none of a real one's methods
+        // (showNotification…), and a page calling them would throw where it
+        // used to wait.
+        if (controller) {
+          kept.add(container);
+          try { Object.defineProperty(container, "controller", { configurable: true, get: () => controller }); } catch (e) {}
+        }
       }
       // WebKit runs an extension's worker on its web process's main thread,
       // and a worker's WebSocket waits there for the main thread to set up
@@ -486,6 +586,95 @@ enum ExtensionShims {
         for (const [k, v] of Object.entries(states)) { Object.defineProperty(WebSocket, k, { value: v }); Object.defineProperty(WebSocket.prototype, k, { value: v }); }
         Object.defineProperty(root, "WebSocket", { value: WebSocket, configurable: true, writable: true });
       }
+      // The same loss meets a worker's port to an app on the Mac: what it
+      // posts in its first moments never reaches the app, and comes back to
+      // the worker's own listeners instead. iCloud Passwords says hello to
+      // its helper that way, and without the helper's answer asks for the
+      // code again and again. So on such a port, what the extension posts
+      // is held from its first message until the browser says the port has
+      // arrived — asked on the same port, as the socket asks — and then sent
+      // in order. WebKit won't let connectNative be replaced in a worker, so
+      // this is done on what every port shares, found through a port to the
+      // browser itself; the question and the answer are kept from the
+      // extension's listeners, and never reach the app.
+      if (worker && runtime && typeof runtime.connectNative === "function") {
+        let found = null;
+        try { found = runtime.connectNative("search"); found.disconnect(); } catch (e) {}
+        const portProto = found && Object.getPrototypeOf(found);
+        const eventProto = found && found.onMessage && Object.getPrototypeOf(found.onMessage);
+        if (portProto && eventProto && typeof portProto.postMessage === "function" && typeof eventProto.addListener === "function") {
+          // Ports that go to the extension's own pages or tabs, not an app.
+          const toPages = new WeakSet();
+          for (const [space, name] of [[runtime, "connect"], [chrome.tabs, "connect"]]) {
+            const connect = space && space[name];
+            if (typeof connect !== "function") continue;
+            put(space, name, (...args) => { const port = connect.apply(space, args); try { toPages.add(port); } catch (e) {} return port; });
+          }
+          const post = portProto.postMessage, add = eventProto.addListener, remove = eventProto.removeListener, has = eventProto.hasListener;
+          const ours = (m) => !!m && typeof m === "object" && "__searchNative" in m;
+          // Ports seen, each with what waits to be sent (null once it may go).
+          const ports = new WeakMap();
+          const start = (port) => {
+            const state = { held: [] };
+            let tries = 0;
+            const flush = () => { const list = state.held; state.held = null; for (const m of list || []) post.call(port, m); };
+            const again = () => {
+              if (!state.held) return;
+              // Unanswered, they go anyway: no worse than before.
+              if (tries++ >= 20) { flush(); return; }
+              try { post.call(port, { __searchNative: "here?" }); } catch (e) {}
+              setTimeout(again, 100 * Math.min(tries, 5));
+            };
+            add.call(port.onMessage, (m) => {
+              if (m && m.__searchNative === "here" && state.held) flush();
+              // WebKit keeps a worker only while it has posted on an open
+              // port in the last two minutes; what arrives on one doesn't
+              // count. The browser's word now and then is answered on the
+              // port, so a worker holding a port to an app stays, as in
+              // Chrome — iCloud Passwords otherwise forgets it was paired.
+              if (m && m.__searchNative === "alive") { try { post.call(port, { __searchNative: "beat" }); } catch (e) {} }
+            });
+            add.call(port.onDisconnect, () => { state.held = null; });
+            again();
+            return state;
+          };
+          put(portProto, "postMessage", function (message) {
+            let state = ports.get(this);
+            if (!state) {
+              const native = !toPages.has(this) && this.sender == null && typeof this.name === "string" && !/^search(\.|$)/.test(this.name);
+              state = native ? start(this) : { held: null };
+              ports.set(this, state);
+            }
+            if (state.held) { state.held.push(message); return; }
+            return post.call(this, message);
+          });
+          // A port's listeners, and only a port's (the namespaces' own
+          // events are kept as they are), each behind one that lets the
+          // question and the answer pass by.
+          const wrapped = new WeakMap();
+          const wrapper = (event, f, make) => {
+            let byEvent = wrapped.get(event);
+            if (!byEvent) { byEvent = new Map(); if (make) wrapped.set(event, byEvent); }
+            let w = byEvent.get(f);
+            if (!w && make) { w = function (m, ...rest) { if (ours(m)) return; return f.call(this, m, ...rest); }; byEvent.set(f, w); }
+            return w;
+          };
+          put(eventProto, "addListener", function (f) {
+            if (kept.has(this) || typeof f !== "function") return add.call(this, f);
+            return add.call(this, wrapper(this, f, true));
+          });
+          put(eventProto, "removeListener", function (f) {
+            const w = !kept.has(this) && typeof f === "function" && wrapper(this, f, false);
+            if (!w) return remove.call(this, f);
+            wrapped.get(this).delete(f);
+            return remove.call(this, w);
+          });
+          put(eventProto, "hasListener", function (f) {
+            const w = !kept.has(this) && typeof f === "function" && wrapper(this, f, false);
+            return has.call(this, w || f);
+          });
+        }
+      }
       // WebKit gives a worker the user agent of the last web page that set
       // one — Safari's, as Search's tabs send — not the Chrome one the
       // extension's pages have. Code that picks its path by it then takes
@@ -502,6 +691,20 @@ enum ExtensionShims {
             Object.defineProperty(proto, "userAgent", { get: () => chromeUA, configurable: true });
             Object.defineProperty(proto, "appVersion", { get: () => chromeUA.replace(/^Mozilla\//, ""), configurable: true });
             Object.defineProperty(proto, "vendor", { get: () => "Google Inc.", configurable: true });
+            if (!("userAgentData" in navigator)) {
+              const major = "__SEARCH_CHROME__".split(".")[0];
+              const brands = [{ brand: "Chromium", version: major }, { brand: "Google Chrome", version: major }, { brand: "Not.A/Brand", version: "99" }];
+              const low = { brands, mobile: false, platform: "macOS" };
+              const mac = (chromeUA.match(/Mac OS X (\d+)[_.](\d+)(?:[_.](\d+))?/) || []).slice(1).map((n) => n || "0").join(".") || "10.15.7";
+              const high = {
+                architecture: "arm", bitness: "64", model: "", platformVersion: mac, wow64: false,
+                fullVersionList: brands.map((b) => ({ brand: b.brand, version: b.version === major ? "__SEARCH_CHROME__" : b.version + ".0.0.0" })),
+                uaFullVersion: "__SEARCH_CHROME__",
+              };
+              const pick = (hints) => Object.assign({}, low, ...(Array.isArray(hints) ? hints : []).filter((h) => h in high).map((h) => ({ [h]: high[h] })));
+              const data = Object.assign({}, low, { getHighEntropyValues: (hints) => Promise.resolve(pick(hints)), toJSON: () => low });
+              Object.defineProperty(proto, "userAgentData", { get: () => data, configurable: true });
+            }
           }
         } catch (e) {}
       }
@@ -581,6 +784,21 @@ enum ExtensionShims {
       let listening = false;
       const join = () => { if (channel && !background && !listening) { listening = true; channel.postMessage({ hello: true, from: me, where: location.pathname }); } };
       const leave = () => { if (channel && !background && listening) { listening = false; channel.postMessage({ bye: true, from: me }); } };
+      // Who sent a message from the extension's popup, as Chrome says it:
+      // no tab. WebKit only carries a page's messages when it can name the
+      // tab the page is in, so the popup is one (see PopupPage) — a tab at
+      // no place in the window's row (its index comes as NaN), its own
+      // page at the top. Passbolt's worker takes a port that comes with a
+      // tab for one of its frames in a website, and turned its popup's
+      // away: the popup stayed empty.
+      const untabbed = (sender) => {
+        const tab = sender && sender.tab;
+        if (!tab || tab.index >= 0 || sender.frameId || tab.url !== sender.url
+          || !runtime || !String(sender.url).startsWith(runtime.getURL(""))) return sender;
+        const plain = { ...sender };
+        delete plain.tab;
+        return plain;
+      };
       const gather = (event, told) => {
         if (!event || typeof event.addListener !== "function") return;
         const add = event.addListener.bind(event);
@@ -595,6 +813,11 @@ enum ExtensionShims {
             if (background) { sendResponse("pong"); return; }
             return true;
           }
+          // Search's own envelopes come from this extension only: another
+          // extension (onMessageExternal) could otherwise speak as one of its
+          // user scripts, or as a frame of its own.
+          const fromHere = !!(sender && sender.id === runtime.id);
+          if (message && (message.__searchUserScript === true || message.__searchToFrame) && !fromHere) return;
           if (message && message.__searchUserScript === true) {
             const route = root.__searchUserScriptMessage;
             return route && route(message.message, sender, sendResponse) && !settled ? true : undefined;
@@ -639,6 +862,7 @@ enum ExtensionShims {
               .then((value) => sendResponse({ value }), (e) => sendResponse({ error: String(e && e.message || e) }));
             return true;
           }
+          sender = untabbed(sender);
           for (const listener of [...listeners]) {
             let result;
             try { result = listener(message, sender, sendResponse); } catch (e) { setTimeout(() => { throw e; }); continue; }
@@ -720,6 +944,15 @@ enum ExtensionShims {
         // WebKit's from the start.
         if (background) { attached = true; add(dispatch); }
       };
+      if (runtime) {
+        const names = new Set();
+        for (let o = runtime; o && o !== Object.prototype; o = Object.getPrototypeOf(o)) Object.getOwnPropertyNames(o).forEach((k) => names.add(k));
+        for (const name of names) {
+          if (name === "constructor" || /^on[A-Z]/.test(name)) continue;
+          let f; try { f = runtime[name]; } catch (e) { continue; }
+          if (typeof f === "function") put(runtime, name, f.bind(runtime));
+        }
+      }
       if (inContent) return;
 
       // In a website's frame, everything WebKit keeps to the extension's own
@@ -906,7 +1139,53 @@ enum ExtensionShims {
       define("offscreen", ["createDocument", "closeDocument", "hasDocument"], [],
         { Reason: new Proxy({}, { get: (_, key) => String(key) }) });
       define("tabGroups", ["get", "query", "update", "move"],
-        ["onCreated", "onRemoved", "onUpdated", "onMoved"], { TAB_GROUP_ID_NONE: -1 });
+        ["onCreated", "onRemoved", "onUpdated", "onMoved"], { TAB_GROUP_ID_NONE: -1,
+          // Read as the worker starts: Claude's lists its colours in a class.
+          Color: { GREY: "grey", BLUE: "blue", RED: "red", YELLOW: "yellow", GREEN: "green",
+            PINK: "pink", PURPLE: "purple", CYAN: "cyan", ORANGE: "orange" } });
+      // Groups change in Search's hands, where no event reaches the
+      // extension: while it listens, they are asked for every few seconds
+      // and what changed is told as Chrome tells it — and at once after the
+      // extension changes one itself.
+      let groupsChanged = () => {};
+      if (chrome.tabGroups && chrome.tabGroups.onCreated && chrome.tabGroups.onCreated.listeners) {
+        const groups = chrome.tabGroups, told = ["onCreated", "onRemoved", "onUpdated"];
+        let known = null, timer = null;
+        // What an update changes; the order of the keys is the browser's.
+        const shape = (g) => JSON.stringify([g.title, g.collapsed, g.color]);
+        const tell = (name, group) => {
+          for (const f of groups[name].listeners) try { f(group); } catch (e) { setTimeout(() => { throw e; }); }
+        };
+        groupsChanged = () => {
+          if (!told.some((name) => groups[name].listeners.size)) return;
+          native("tabGroups.query", [{}]).then((now) => {
+            const next = new Map((now || []).map((g) => [g.id, g]));
+            if (known) {
+              for (const [id, g] of next) {
+                if (!known.has(id)) tell("onCreated", g);
+                else if (shape(known.get(id)) !== shape(g)) tell("onUpdated", g);
+              }
+              for (const [id, g] of known) if (!next.has(id)) tell("onRemoved", g);
+            }
+            known = next;
+          }, () => {});
+        };
+        for (const name of told) {
+          const add = groups[name].addListener;
+          groups[name].addListener = (f) => {
+            add(f);
+            if (timer) return;
+            groupsChanged();
+            timer = setInterval(groupsChanged, 3000);
+          };
+        }
+        put(groups, "update", (id, props, callback) => {
+          if (typeof props === "function") { callback = props; props = {}; }
+          const p = native("tabGroups.update", [id, props || {}]).then((g) => { groupsChanged(); return g; });
+          if (typeof callback !== "function") return p;
+          p.then((g) => callback(g), (e) => withLastError(e, callback));
+        });
+      }
       define("fontSettings",
         ["getFontList", "getFont", "setFont", "clearFont", "getDefaultFontSize", "setDefaultFontSize",
          "clearDefaultFontSize", "getDefaultFixedFontSize", "setDefaultFixedFontSize", "clearDefaultFixedFontSize",
@@ -1165,7 +1444,6 @@ enum ExtensionShims {
         getZoomSettings: resolve({ mode: "automatic", scope: "per-origin", defaultZoomFactor: 1 }),
         setZoomSettings: resolve(undefined), onZoomChange: event(),
         onSelectionChanged: event(), onActiveChanged: event(), onHighlightChanged: event(),
-        group: refuse("tabs.group"), ungroup: resolve(undefined),
         getSelected: (windowId, callback) => {
           const f = typeof windowId === "function" ? windowId : callback;
           chrome.tabs.query({ active: true, currentWindow: true }).then((t) => f && f(t[0]));
@@ -1183,7 +1461,7 @@ enum ExtensionShims {
           const out = [];
           for (const id of Array.isArray(ids) ? ids : [ids]) {
             const tab = await chrome.tabs.get(id);
-            await native(api, [tab.index, extra]);
+            await native(api, [placeOf(tab, await frames()), extra]);
             await settle();
             out.push(await chrome.tabs.get(id).catch(() => tab));
           }
@@ -1195,7 +1473,22 @@ enum ExtensionShims {
           if (!callback) return p;
           p.then((v) => callback(v), (e) => withLastError(e, callback));
         };
+        const indexes = async (ids) => {
+          const known = await frames();
+          return Promise.all((Array.isArray(ids) ? ids : [ids]).map((id) => chrome.tabs.get(id).then((t) => placeOf(t, known))));
+        };
         fill("tabs", {
+          // Into a group, a new one or one named by its number, or out of
+          // one. A group left with no tab is gone, as in Chrome.
+          group: withCallback(async (options = {}) => {
+            const id = await native("tabs.group", [await indexes(options.tabIds), options.groupId ?? -1]);
+            groupsChanged();
+            return id;
+          }),
+          ungroup: withCallback(async (ids) => {
+            await native("tabs.ungroup", [await indexes(ids)]);
+            groupsChanged();
+          }),
           move: withCallback(async (ids, props = {}) => {
             const list = Array.isArray(ids) ? ids : [ids];
             const out = [];
@@ -1211,7 +1504,8 @@ enum ExtensionShims {
             : byIndex("tabs.discard")(id)),
           highlight: withCallback(async (info = {}) => {
             const first = Array.isArray(info.tabs) ? info.tabs[0] : info.tabs;
-            await native("tabs.activate", [first]);
+            const window = info.windowId ?? (await chrome.windows.getCurrent()).id;
+            await native("tabs.activate", [{ i: first, w: (await frames()).get(window) }]);
             await settle();
             return chrome.windows ? chrome.windows.getCurrent({ populate: true }) : undefined;
           }),
@@ -1230,6 +1524,46 @@ enum ExtensionShims {
         managed: { get: resolve({}), getBytesInUse: resolve(0), onChanged: event() },
         AccessLevel: { TRUSTED_CONTEXTS: "TRUSTED_CONTEXTS", TRUSTED_AND_UNTRUSTED_CONTEXTS: "TRUSTED_AND_UNTRUSTED_CONTEXTS" },
       });
+      // A page at the address of the extension's popup hears no events
+      // from WebKit: WebKit takes it for its own popup, and Search's popup
+      // is a view of Search's. The one that matters, storage.onChanged —
+      // Bitwarden learns a self-hosted server's address from it — is passed
+      // on by the background, which does hear it, to such pages: the popup,
+      // and the same page opened in a tab ("pop out"). They keep their
+      // address, which extensions check (Dark Reader only answers its popup
+      // at its own).
+      {
+        const manifest = (() => { try { return runtime.getManifest() || {}; } catch (e) { return {}; } })();
+        const action = manifest.action || manifest.browser_action || {};
+        let popupPath = null;
+        try { if (typeof action.default_popup === "string" && action.default_popup) popupPath = new URL(action.default_popup, location.origin + "/").pathname; } catch (e) {}
+        const relay = popupPath && !embedded && typeof BroadcastChannel === "function" ? new BroadcastChannel("search-storage") : null;
+        if (relay && background && chrome.storage && chrome.storage.onChanged) {
+          kept.add(chrome.storage.onChanged);
+          chrome.storage.onChanged.addListener((changes, area) => {
+            try { relay.postMessage({ changes, area }); } catch (e) {}
+          });
+        } else if (relay && !background && typeof location !== "undefined" && location.pathname === popupPath && chrome.storage) {
+          const all = new Set(), byArea = {};
+          const mend = (ev, set) => {
+            if (!ev || typeof ev !== "object") return;
+            put(ev, "addListener", (f) => { if (typeof f === "function") set.add(f); });
+            put(ev, "removeListener", (f) => { set.delete(f); });
+            put(ev, "hasListener", (f) => set.has(f));
+            put(ev, "hasListeners", () => set.size > 0);
+          };
+          mend(chrome.storage.onChanged, all);
+          for (const area of ["local", "sync", "session", "managed"]) {
+            const store = chrome.storage[area];
+            if (store && store.onChanged) mend(store.onChanged, byArea[area] = new Set());
+          }
+          relay.onmessage = ({ data }) => {
+            if (!data || !data.changes) return;
+            for (const f of [...all]) { try { f(data.changes, data.area); } catch (e) { console.error(e); } }
+            for (const f of [...(byArea[data.area] || [])]) { try { f(data.changes); } catch (e) { console.error(e); } }
+          };
+        }
+      }
       // Items built with Object.create(null) — Chrome stores them, WebKit
       // throws that an object is expected.
       for (const area of ["local", "sync", "session"]) {
@@ -1399,27 +1733,42 @@ enum ExtensionShims {
         });
       }
 
-      // Tabs as Chrome describes them. Every tab has a groupId (-1 when in
-      // no group — Search has none), which code tests before anything else;
-      // and with the "tabs" permission an extension sees every tab's address
-      // and title, where WebKit shows them only for sites it has host
-      // access to.
+      // Tabs as Chrome describes them. Every tab has a groupId, which code
+      // tests before anything else: -1 when in no group, and the group's
+      // number, asked of the browser, for an extension that asked for
+      // "tabGroups" — only those have any use for it, so the others are
+      // spared the question. With the "tabs" permission an extension sees
+      // every tab's address and title, where WebKit shows them only for
+      // sites it has host access to.
       if (chrome.tabs) {
-        const seesTabs = (() => { try { return (runtime.getManifest().permissions || []).includes("tabs"); } catch (e) { return false; } })();
+        const permissions = (() => { try { return runtime.getManifest().permissions || []; } catch (e) { return []; } })();
+        const seesTabs = permissions.includes("tabs"), seesGroups = permissions.includes("tabGroups");
         const isTab = (t) => t && typeof t === "object" && typeof t.id === "number";
         // Mends in place; a promise only when the browser has to be asked.
         const mend = (list) => {
           const tabs = list.filter(isTab);
           for (const t of tabs) if (t.groupId === undefined) try { t.groupId = -1; } catch (e) {}
           const blind = seesTabs ? tabs.filter((t) => !t.url && t.index >= 0) : [];
-          if (!blind.length) return null;
-          return native("tabs.describe", [blind.map((t) => t.index)]).then((info) => {
-            blind.forEach((t, i) => {
-              const d = info && info[i];
-              if (!d) return;
-              try { if (d.url) t.url = d.url; if (d.title && !t.title) t.title = d.title; } catch (e) {}
-            });
-          }, () => {});
+          const placed = seesGroups ? tabs.filter((t) => t.index >= 0) : [];
+          if (!blind.length && !placed.length) return null;
+          return frames().then((known) => Promise.all([
+            blind.length && native("tabs.describe", [blind.map((t) => placeOf(t, known))]).then((info) => {
+              blind.forEach((t, i) => {
+                const d = info && info[i];
+                if (!d) return;
+                try {
+                  if (d.url) t.url = d.url;
+                  if (d.title && !t.title) t.title = d.title;
+                  if (d.favIconUrl && !t.favIconUrl) t.favIconUrl = d.favIconUrl;
+                } catch (e) {}
+              });
+            }, () => {}),
+            placed.length && native("tabs.groups", [placed.map((t) => placeOf(t, known))]).then((ids) => {
+              placed.forEach((t, i) => {
+                if (ids && typeof ids[i] === "number") try { t.groupId = ids[i]; } catch (e) {}
+              });
+            }, () => {}),
+          ]));
         };
         const tabsIn = (value) => Array.isArray(value) ? value.flatMap(tabsIn)
           : isTab(value) ? [value] : value && Array.isArray(value.tabs) ? value.tabs : [];
@@ -1434,17 +1783,36 @@ enum ExtensionShims {
           });
         };
         for (const name of ["query", "get", "getCurrent", "create", "update", "duplicate", "move", "reload"]) mendResult(chrome.tabs, name);
+        // A query for a group's tabs: WebKit knows no groupId, so it is asked
+        // without one and the tabs are sorted out after.
+        if (seesGroups && typeof chrome.tabs.query === "function") {
+          const query = chrome.tabs.query.bind(chrome.tabs);
+          put(chrome.tabs, "query", (info, callback) => {
+            if (typeof info === "function") { callback = info; info = {}; }
+            const wanted = info && info.groupId;
+            let p;
+            if (wanted === undefined) p = query(info || {});
+            else {
+              const rest = Object.assign({}, info);
+              delete rest.groupId;
+              p = Promise.resolve(query(rest)).then((tabs) => tabs.filter((t) => t.groupId === wanted));
+            }
+            if (typeof callback !== "function") return p;
+            p.then((r) => callback(r), (e) => withLastError(e, callback));
+          });
+        }
         for (const name of ["get", "getAll", "getCurrent", "getLastFocused", "create"]) mendResult(chrome.windows, name);
         // Listeners given a tab: the tab is mended before they see it.
-        const mendArgs = (target, positions) => {
+        const mendArgs = (target, positions, told) => {
           if (!target || typeof target.addListener !== "function") return;
           const add = target.addListener.bind(target), remove = target.removeListener.bind(target);
           const wrapped = new Map();
           put(target, "addListener", (listener, ...rest) => {
+            const state = new Map();
             const w = function (...args) {
               const pending = mend(positions.map((i) => args[i]));
-              if (!pending) return listener.apply(this, args);
-              pending.then(() => listener.apply(this, args));
+              if (!pending) { if (told) told(args, state); return listener.apply(this, args); }
+              pending.then(() => { if (told) told(args, state); listener.apply(this, args); });
             };
             wrapped.set(listener, w);
             return add(w, ...rest);
@@ -1453,7 +1821,25 @@ enum ExtensionShims {
           put(target, "hasListener", (listener) => wrapped.has(listener));
         };
         mendArgs(chrome.tabs.onCreated, [0]);
-        mendArgs(chrome.tabs.onUpdated, [2]);
+        // What changed, in onUpdated's changeInfo. Without host access
+        // WebKit blanks url and title there ("") and leaves favIconUrl out,
+        // and a tab manager, or an extension watching its sign-in tab, reads
+        // them there. A blanked one is filled from the tab; one left out is
+        // added when it differs from what this listener last saw of the tab.
+        const told = seesTabs ? (args, state) => {
+          const info = args[1], tab = args[2];
+          if (!info || typeof info !== "object" || !isTab(tab) || !tab.url) return;
+          const before = state.get(tab.id);
+          const fill = (key, changed) => {
+            const value = tab[key];
+            if (value && (info[key] === "" || (info[key] === undefined && changed))) try { info[key] = value; } catch (e) {}
+          };
+          fill("url", before ? before.url !== tab.url : info.status === "loading");
+          fill("title", !!before && before.title !== tab.title);
+          fill("favIconUrl", !!before && before.favIconUrl !== tab.favIconUrl);
+          state.set(tab.id, { url: tab.url, title: tab.title, favIconUrl: tab.favIconUrl });
+        } : null;
+        mendArgs(chrome.tabs.onUpdated, [2], told);
         mendArgs(chrome.action && chrome.action.onClicked, [0]);
         mendArgs(chrome.contextMenus && chrome.contextMenus.onClicked, [1]);
         mendArgs(chrome.menus && chrome.menus.onClicked, [1]);
@@ -1501,7 +1887,12 @@ enum ExtensionShims {
             const missing = mine.filter((m) => !have.has(m));
             if (missing.length && !(await native("permissions.request", [missing]))) return false;
           }
-          return theirs.length || origins.length ? request({ permissions: theirs, origins }) : true;
+          if (!theirs.length && !origins.length) return true;
+          // Asked from a click on the extension's button: when filling in
+          // the tab it was given (mend) cost WebKit the click, Search
+          // knows it was one and asks the same question.
+          return Promise.resolve(request({ permissions: theirs, origins })).catch((e) =>
+            /user gesture/i.test(String(e && e.message)) ? native("permissions.afterClick", [theirs, origins]) : Promise.reject(e));
         }));
         put(p, "getAll", (callback) => {
           const pr = (async () => {
@@ -1714,6 +2105,88 @@ enum ExtensionShims {
             put(target, "removeListener", (listener) => { late.delete(listener); try { remove(listener); } catch (e) {} });
           }
         }
+      }
+
+      // What one of the extension's pages or its worker posts to another
+      // before their port has opened — at once after connect, or from inside
+      // onConnect — WebKit keeps until the other end takes the port, then
+      // hands on once for each end's world: between two of the extension's
+      // own, the same world, so twice. iCloud Passwords' popup asks its
+      // worker for its state that way, and was answered twice. So between
+      // the extension's own ends every message goes numbered by the end
+      // that sends it, and a number already heard is let go by. A content
+      // script's port, or an app's, goes as it is.
+      if (runtime && typeof runtime.connect === "function" && runtime.onConnect) {
+        const own = runtime.getURL("");
+        const numbered = new WeakSet();
+        // Set on the port itself, not with `put`, which holds what it touches
+        // for good: a port is the extension's to let go. Its onMessage is held
+        // by what is set here, so it isn't made afresh without it.
+        const set = (target, key, value) => { try { Object.defineProperty(target, key, { value, configurable: true, writable: true }); } catch (e) {} };
+        const number = (port) => {
+          const event = port && port.onMessage, post = port && port.postMessage;
+          if (!event || typeof event.addListener !== "function" || typeof post !== "function" || numbered.has(port)) return port;
+          numbered.add(port);
+          const me = Math.random().toString(36).slice(2);
+          let sent = 0;
+          const heard = new Map();
+          const listeners = new Set();
+          event.addListener.call(event, (message, ...rest) => {
+            const tag = message && typeof message === "object" ? message.__searchPort : null;
+            if (Array.isArray(tag)) {
+              if (tag[1] <= (heard.get(tag[0]) || 0)) return;
+              heard.set(tag[0], tag[1]);
+              message = message.message;
+            }
+            for (const f of [...listeners]) { try { f(message, ...rest); } catch (e) { setTimeout(() => { throw e; }); } }
+          });
+          // WebKit makes a port's onMessage afresh once nothing holds it, and
+          // a fresh one has none of what is set below: a listener added to it
+          // later would hear the numbered wrapper. Held on the port, it stays.
+          set(port, "onMessage", event);
+          set(port, "postMessage", (message) => post.call(port, { __searchPort: [me, ++sent], message }));
+          set(event, "addListener", (f) => { listeners.add(f); });
+          set(event, "removeListener", (f) => { listeners.delete(f); });
+          set(event, "hasListener", (f) => listeners.has(f));
+          set(event, "hasListeners", () => listeners.size > 0);
+          return port;
+        };
+        const connect = runtime.connect;
+        // Only a port to the extension itself: another extension would hear
+        // the numbered wrapper, not the message.
+        put(runtime, "connect", (...args) => {
+          const port = connect.apply(runtime, args);
+          return typeof args[0] === "string" && args[0] !== runtime.id ? port : number(port);
+        });
+        const onConnect = runtime.onConnect;
+        const add = onConnect.addListener, remove = onConnect.removeListener, has = onConnect.hasListener;
+        const wrapped = new WeakMap();
+        // The worker's sender is the bare origin, with no slash after it.
+        const fromOwn = (port) => !!port && !!port.sender && (String(port.sender.url) + "/").startsWith(own);
+        put(onConnect, "addListener", (listener, ...rest) => {
+          if (typeof listener !== "function") return add.call(onConnect, listener, ...rest);
+          let w = wrapped.get(listener);
+          if (!w) {
+            w = (port) => {
+              const given = port && port.sender, sender = untabbed(given);
+              port = fromOwn(port) ? number(port) : port;
+              // WebKit makes a port's sender afresh at each look, over
+              // anything set on the port: the port is seen through a proxy.
+              if (sender !== given) {
+                port = new Proxy(port, { get: (target, key) => {
+                  if (key === "sender") return sender;
+                  const value = target[key];
+                  return typeof value === "function" ? value.bind(target) : value;
+                } });
+              }
+              return listener(port);
+            };
+            wrapped.set(listener, w);
+          }
+          return add.call(onConnect, w, ...rest);
+        });
+        put(onConnect, "removeListener", (listener) => remove.call(onConnect, wrapped.get(listener) || listener));
+        put(onConnect, "hasListener", (listener) => has.call(onConnect, wrapped.get(listener) || listener));
       }
 
       // Members of namespaces WebKit has.
@@ -2263,6 +2736,27 @@ enum ExtensionShims {
         }
     }
 
+    /// The groups an extension is shown: none while groups are off, and
+    /// never one without a tab.
+    private static func listedGroups(_ browser: Browser) -> [TabGroup] {
+        guard browser.prefs.usesTabGroups else { return [] }
+        return browser.tabGroups.filter { !browser.tabs(in: $0.id).isEmpty }
+    }
+
+    private static func listedGroup(_ number: Any?, in browser: Browser) throws -> TabGroup {
+        guard let number = number as? Int,
+              let group = listedGroups(browser).first(where: { TabGroup.number($0.id) == number })
+        else { throw Unsupported(what: "No group with id: \(number.map { "\($0)" } ?? "none").") }
+        return group
+    }
+
+    /// A group as Chrome describes it. Search's groups have no colour; grey
+    /// is Chrome's first.
+    private static func chromeGroup(_ group: TabGroup) -> [String: Any] {
+        ["id": TabGroup.number(group.id), "title": group.name, "collapsed": group.collapsed,
+         "color": "grey", "windowId": 1, "shared": false]
+    }
+
     struct Unsupported: LocalizedError {
         let what: String
         var errorDescription: String? { what }
@@ -2282,6 +2776,12 @@ enum ExtensionShims {
         "readingList": "readingList",
         "userScripts": "userScripts",
         "identity": "identity",
+        "search": "search",
+        "notifications": "notifications",
+        "idle": "idle",
+        "power": "power",
+        "tts": "tts",
+        "tabGroups": "tabGroups",
     ]
 
     /// What this extension asked for: the names in its manifest and any
@@ -2289,7 +2789,48 @@ enum ExtensionShims {
     /// courtesy to honest code, the shim runs beside the extension's own,
     /// so the one that counts is here. The manifest is the one WebKit
     /// already holds, not the file read again on every call.
-    private static func allowed(_ id: String, context: WKWebExtensionContext) -> Set<String> {
+    /// A tab's icon for favIconUrl: the picture the tab wears, as a small
+    /// PNG. Search keeps icons as pictures, not addresses, and Chrome's
+    /// favIconUrl may be a data: URL. Made once per site and kept.
+    /// A tab as the shim names it: `i`, its place in its window's row as
+    /// extensions see it, and `w`, that window's frame from windows.getAll()
+    /// (see Extensions.tab(windowFrame:index:)). A bare number, or no frame,
+    /// is only understood while there is one window.
+    private static func located(_ place: Any?, owner: Extensions) -> Tab? {
+        let spec = place as? [String: Any]
+        guard let index = (place as? NSNumber)?.intValue ?? (spec?["i"] as? NSNumber)?.intValue else { return nil }
+        let number = { (value: Any?) in (value as? NSNumber)?.doubleValue }
+        if let w = spec?["w"] as? [String: Any], let left = number(w["left"]), let top = number(w["top"]),
+           let width = number(w["width"]), let height = number(w["height"]) {
+            return owner.tab(windowFrame: CGRect(x: left, y: top, width: width, height: height), index: index)
+        }
+        guard Browsers.all.count <= 1 else { return nil }
+        let visible = owner.visibleTabs
+        return visible.indices.contains(index) ? visible[index] : nil
+    }
+
+    private static var favIcons: [String: String] = [:]
+    static func forgetIcons() { favIcons.removeAll() }
+
+    private static func favIconURL(_ tab: Tab) -> String? {
+        guard let host = tab.address?.host(), let icon = tab.icon ?? Favicons.shared.cached(host) else { return nil }
+        if let known = favIcons[host] { return known }
+        let side = 32
+        guard let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8,
+                                            samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                            bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        icon.draw(in: NSRect(x: 0, y: 0, width: side, height: side))
+        NSGraphicsContext.restoreGraphicsState()
+        guard let png = bitmap.representation(using: .png, properties: [:]) else { return nil }
+        let url = "data:image/png;base64," + png.base64EncodedString()
+        if favIcons.count > 500 { favIcons.removeAll() }
+        favIcons[host] = url
+        return url
+    }
+
+    static func allowed(_ id: String, context: WKWebExtensionContext) -> Set<String> {
         let asked = (context.webExtension.manifest["permissions"] as? [Any] ?? []).compactMap { $0 as? String }
         return Set(asked + (Store.settings.stringArray(forKey: "extensions.granted.\(id)") ?? []))
     }
@@ -2365,13 +2906,14 @@ enum ExtensionShims {
             let spec = first as? [String: Any] ?? [:]
             let title = spec["title"] as? String ?? ""
             let parent = (spec["parentId"] as? String).flatMap(UUID.init(uuidString:))
+            let index = spec["index"] as? Int
             let made: Bookmark
             if let url = (spec["url"] as? String).flatMap(URL.init(string:)) {
-                made = browser.bookmarks.insert(.site(title, url), into: parent)
+                made = browser.bookmarks.insert(.site(title, url), into: parent, at: index)
             } else {
-                made = browser.bookmarks.insert(.folder(title, []), into: parent)
+                made = browser.bookmarks.insert(.folder(title, []), into: parent, at: index)
             }
-            return node(made, parent: parent?.uuidString ?? "1", index: 0, deep: false)
+            return find(made.id.uuidString, in: browser.bookmarks.roots).map { node($0.node, parent: $0.parent, index: $0.index, deep: false) }
         case "bookmarks.update":
             guard let key = first as? String, let uuid = UUID(uuidString: key) else { throw Unsupported(what: "No such bookmark") }
             let changes = args.count > 1 ? args[1] as? [String: Any] ?? [:] : [:]
@@ -2379,8 +2921,11 @@ enum ExtensionShims {
             return find(key, in: browser.bookmarks.roots).map { node($0.node, parent: $0.parent, index: $0.index, deep: false) }
         case "bookmarks.move":
             guard let key = first as? String, let uuid = UUID(uuidString: key) else { throw Unsupported(what: "No such bookmark") }
-            let target = (args.count > 1 ? args[1] as? [String: Any] : nil)?["parentId"] as? String
-            browser.bookmarks.move(uuid, into: target.flatMap(UUID.init(uuidString:)))
+            let spec = (args.count > 1 ? args[1] as? [String: Any] : nil) ?? [:]
+            // No parent named keeps it in the folder it is in, as in Chrome;
+            // "1", the bar, is the top level.
+            let target = (spec["parentId"] as? String).map(UUID.init(uuidString:)) ?? browser.bookmarks.parent(of: uuid)
+            browser.bookmarks.move(uuid, into: target, at: spec["index"] as? Int)
             return find(key, in: browser.bookmarks.roots).map { node($0.node, parent: $0.parent, index: $0.index, deep: false) }
         case "bookmarks.remove", "bookmarks.removeTree":
             guard let key = first as? String, let uuid = UUID(uuidString: key) else { throw Unsupported(what: "No such bookmark") }
@@ -2440,6 +2985,7 @@ enum ExtensionShims {
                 // A name it asks for, which may carry folders: only the last part is kept.
                 browser.namedDownloads[url] = (name as NSString).lastPathComponent
             }
+            ExtensionShims.askedDownloads[url] = id
             let download = await web.startDownload(using: URLRequest(url: url))
             browser.keep(download)
             return browser.loot.kept.count + 1
@@ -2452,7 +2998,19 @@ enum ExtensionShims {
         case "downloads.open", "downloads.show":
             guard let index = first as? Int, browser.loot.kept.indices.contains(index - 1) else { return nil }
             let keep = browser.loot.kept[index - 1]
-            if api == "downloads.open" { browser.loot.open(keep) } else { browser.loot.reveal(keep) }
+            if api == "downloads.open" {
+                // As in Chrome, opening asks for its own permission; and only
+                // a file this extension downloaded itself, not any of yours.
+                guard allowed(id, context: context).contains("downloads.open") else {
+                    throw Unsupported(what: "The extension never asked for \u{201C}downloads.open\u{201D}")
+                }
+                guard ExtensionShims.ownDownloads[id]?.contains(keep.path) == true else {
+                    throw Unsupported(what: "Only a download this extension started can be opened by it")
+                }
+                browser.loot.open(keep)
+            } else {
+                browser.loot.reveal(keep)
+            }
             return nil
         case "downloads.showDefaultFolder":
             NSWorkspace.shared.open(browser.prefs.downloads)
@@ -2486,7 +3044,8 @@ enum ExtensionShims {
                   let configuration = context.webViewConfiguration
             else { throw Unsupported(what: "No page for the offscreen document") }
             let page = WKWebView(frame: NSRect(x: 0, y: 0, width: 800, height: 600), configuration: configuration)
-            page.load(URLRequest(url: context.baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))))
+            guard let url = ExtensionShims.page(path, in: context) else { throw Unsupported(what: "No page for the offscreen document") }
+            page.load(URLRequest(url: url))
             offscreen[id] = page
             // Answered once the page has loaded, as Chrome does: the worker's
             // next line is a message to it, and a page still loading has no
@@ -2656,6 +3215,19 @@ enum ExtensionShims {
             owner.noteError(first as? String ?? "?", for: id)
             return nil
 
+        // MARK: its own pages, for clients.matchAll() (see the shim)
+        case "clients.pages":
+            var pages: [[String: Any]] = []
+            if let popup = ExtensionPopup.shared.client(of: id) { pages.append(popup) }
+            for tab in browser.tabs {
+                guard let web = tab.built, let url = web.url, Browser.extensionHost(of: url) == id else { continue }
+                let shown = tab.id == browser.activeID && web.window?.occlusionState.contains(.visible) == true
+                pages.append(["id": tab.id.uuidString, "url": url.absoluteString, "visible": shown, "focused": shown && web.window?.isKeyWindow == true])
+            }
+            // Its offscreen document too, as Chrome lists it.
+            if let url = offscreen[id]?.url { pages.append(["id": "offscreen", "url": url.absoluteString, "visible": false, "focused": false]) }
+            return pages
+
         // MARK: the button's popup
         case "action.popup":
             let path = first as? String ?? ""
@@ -2721,6 +3293,37 @@ enum ExtensionShims {
             let had = Store.settings.stringArray(forKey: "extensions.granted.\(id)") ?? []
             Store.settings.set(Array(Set(had + wanted)).sorted(), forKey: "extensions.granted.\(id)")
             return true
+        case "permissions.afterClick":
+            // permissions.request for WebKit's own permissions and sites,
+            // made from a click on the extension's button whose moment
+            // WebKit lost while the shim filled in the tab it was given
+            // (see `mend`). Only within seconds of that click, once, and
+            // only what the manifest names, asked as WebKit would ask it.
+            guard let when = Extensions.clicked[id], Date().timeIntervalSince(when) < 10 else {
+                throw Unsupported(what: "Invalid call to permissions.request(). Must be called during a user gesture.")
+            }
+            Extensions.clicked[id] = nil
+            let found = context.webExtension
+            let wanted = ((first as? [String]) ?? []).map { WKWebExtension.Permission(rawValue: $0) }
+            let origins = ((args.dropFirst().first as? [String]) ?? []).compactMap { try? WKWebExtension.MatchPattern(string: $0) }
+            let named = found.requestedPermissions.union(found.optionalPermissions)
+            // Sites as the manifest names them, optional ones included —
+            // which allRequestedMatchPatterns leaves out.
+            let places = Set(found.allRequestedMatchPatterns.union(found.optionalPermissionMatchPatterns).map(\.string))
+            guard wanted.allSatisfy(named.contains), origins.allSatisfy({ places.contains($0.string) }) else {
+                throw Unsupported(what: "Only permissions specified in the manifest may be requested.")
+            }
+            let missing = wanted.filter { context.permissionStatus(for: $0) != .grantedExplicitly }
+            let unreached = origins.filter { context.permissionStatus(for: $0) != .grantedExplicitly }
+            guard !missing.isEmpty || !unreached.isEmpty else { return true }
+            let every = unreached.contains { $0.matchesAllHosts || $0.matchesAllURLs }
+            let sites = every ? "every website" : unreached.map(\.string).sorted().joined(separator: ", ")
+            let question = unreached.isEmpty ? "asks for more access" : "wants to read and change \(sites)"
+            let detail = missing.isEmpty ? "Until you remove the extension." : missing.map(\.rawValue).sorted().joined(separator: ", ")
+            guard await owner.ask(question, detail: detail, context: context) else { return false }
+            for permission in missing { context.setPermissionStatus(.grantedExplicitly, for: permission) }
+            for pattern in unreached { context.setPermissionStatus(.grantedExplicitly, for: pattern) }
+            return true
         case "permissions.remove":
             let gone = Set((first as? [String]) ?? [])
             let had = Store.settings.stringArray(forKey: "extensions.granted.\(id)") ?? []
@@ -2729,15 +3332,22 @@ enum ExtensionShims {
 
         // MARK: tabs, by where they are in the row
         case "tabs.describe":
-            let visible = owner.visibleTabs
-            return ((first as? [Int]) ?? []).map { index -> Any in
-                guard visible.indices.contains(index) else { return NSNull() }
-                return ["url": visible[index].address?.absoluteString ?? "", "title": visible[index].title]
+            let places: [Any] = first as? [Any] ?? []
+            return places.map { place -> Any in
+                guard let tab = located(place, owner: owner) else { return NSNull() }
+                // Another extension's page stays blank, as WebKit keeps it
+                // (see the refusal in Extensions.load); its own are its own.
+                if let url = tab.address, let scheme = url.scheme?.lowercased(),
+                   [Extensions.scheme, Extensions.formerScheme].contains(scheme), url.host() != id {
+                    return ["url": "", "title": ""]
+                }
+                var described: [String: Any] = ["url": tab.address?.absoluteString ?? "", "title": tab.title]
+                if let icon = favIconURL(tab) { described["favIconUrl"] = icon }
+                return described
             }
         case "tabs.move", "tabs.discard", "tabs.activate":
-            let visible = owner.visibleTabs
-            guard let from = first as? Int, visible.indices.contains(from) else { throw Unsupported(what: "No tab there") }
-            let tab = visible[from]
+            guard let tab = located(first, owner: owner), let browser = owner.browser(of: tab) else { throw Unsupported(what: "No tab there") }
+            let visible = owner.visibleTabs(of: browser)
             switch api {
             case "tabs.move":
                 let wanted = args.dropFirst().first as? Int ?? -1
@@ -2753,7 +3363,9 @@ enum ExtensionShims {
         // MARK: search
         case "search.query":
             let spec = first as? [String: Any] ?? [:]
-            guard let url = browser.destination(for: spec["text"] as? String ?? "") else { return nil }
+            // Words to search for, as in Chrome — never an address, file:
+            // and data: included, which the address field would take.
+            guard let url = browser.searchURL(for: spec["text"] as? String ?? "") else { return nil }
             switch spec["disposition"] as? String {
             case "NEW_TAB", "NEW_WINDOW": browser.open(url, foreground: true)
             default: browser.visit(url)
@@ -2858,11 +3470,63 @@ enum ExtensionShims {
                         "workArea": ["left": v.minX, "top": v.minY, "width": v.width, "height": v.height]] as [String: Any]
             }
 
-        // MARK: tab groups — there are none
+        // MARK: tab groups
+        // Only while they are on (Settings › Tabs): off, they sleep, for
+        // extensions as on screen. A group without a tab is never shown.
+        case "tabs.groups":
+            let places: [Any] = first as? [Any] ?? []
+            return places.map { place -> Int in
+                guard browser.prefs.usesTabGroups, let tab = located(place, owner: owner),
+                      let home = owner.browser(of: tab), let group = home.group(of: tab) else { return -1 }
+                return TabGroup.number(group)
+            }
         case "tabGroups.query":
-            return []
-        case "tabGroups.get", "tabGroups.update", "tabGroups.move":
-            throw Unsupported(what: "Search has no tab groups")
+            let spec = first as? [String: Any] ?? [:]
+            return listedGroups(browser).filter { group in
+                (spec["title"] as? String).map { $0 == group.name } ?? true
+                    && (spec["collapsed"] as? Bool).map { $0 == group.collapsed } ?? true
+                    && (spec["color"] as? String).map { $0 == "grey" } ?? true
+            }.map(chromeGroup)
+        case "tabGroups.get":
+            return chromeGroup(try listedGroup(first, in: browser))
+        case "tabGroups.update":
+            let group = try listedGroup(first, in: browser)
+            let props = args.dropFirst().first as? [String: Any] ?? [:]
+            if let title = props["title"] as? String { browser.renameTabGroup(group.id, to: title) }
+            if let collapsed = props["collapsed"] as? Bool, collapsed != group.collapsed { browser.toggleTabGroup(group.id) }
+            return chromeGroup(browser.tabGroups.first { $0.id == group.id } ?? group)
+        case "tabGroups.move":
+            throw Unsupported(what: "Search can't move a tab group for an extension")
+        case "tabs.group":
+            guard browser.prefs.usesTabGroups else { throw Unsupported(what: "Tab groups are off in Search's settings") }
+            let places: [Any] = first as? [Any] ?? []
+            let tabs = places.compactMap { located($0, owner: owner) }
+            guard !tabs.isEmpty else { throw Unsupported(what: "No tabs to group") }
+            // A group is one window's, as in Chrome.
+            guard let browser = owner.browser(of: tabs[0]), tabs.allSatisfy({ owner.browser(of: $0) === browser }) else {
+                throw Unsupported(what: "Tabs from different windows can't share a group")
+            }
+            // Pins and private tabs are never in a group in Search.
+            guard tabs.allSatisfy({ $0.pin == nil && !$0.shy }) else {
+                throw Unsupported(what: "Pinned and private tabs can't be grouped")
+            }
+            let target: UUID
+            if let number = args.dropFirst().first as? Int, number != -1 {
+                target = try listedGroup(number, in: browser).id
+            } else {
+                // A new group, as its menu makes one, without its name to type.
+                target = browser.addTabGroup(containing: tabs[0])
+                browser.editingGroupID = nil
+            }
+            for tab in tabs { browser.move(tab, toGroup: target) }
+            return TabGroup.number(target)
+        case "tabs.ungroup":
+            guard browser.prefs.usesTabGroups else { return nil }
+            let places: [Any] = first as? [Any] ?? []
+            for tab in places.compactMap({ located($0, owner: owner) }) {
+                owner.browser(of: tab)?.move(tab, toGroup: nil)
+            }
+            return nil
 
         // MARK: identity
         case "identity.launchWebAuthFlow":
@@ -2938,6 +3602,10 @@ enum ExtensionShims {
 
     /// Popups extensions set for their buttons: per tab, or "*" for all.
     static var popups: [String: [String: String]] = [:]
+    /// Downloads an extension asked for, by address, until they land; then
+    /// the files they became, which are the only ones it may open.
+    static var askedDownloads: [URL: String] = [:]
+    static var ownDownloads: [String: Set<String>] = [:]
 
     /// Keep-awake assertions, one per extension that asked.
     static var awake: [String: IOPMAssertionID] = [:]
@@ -3009,9 +3677,25 @@ enum ExtensionShims {
         (context.webExtension.manifest["side_panel"] as? [String: Any])?["default_path"] as? String
     }
 
+    /// One of the extension's own pages, from the path it gave: resolved
+    /// rather than appended, since a path can carry a query (Claude's side
+    /// panel names its tab, sidepanel.html?tabId=…), which appended would be
+    /// escaped into the file's name. Never anywhere but inside the
+    /// extension: a full address given as a "path" is refused.
+    static func page(_ path: String, in context: WKWebExtensionContext) -> URL? {
+        let base = context.baseURL
+        guard let url = URL(string: path.trimmingCharacters(in: CharacterSet(charactersIn: "/")), relativeTo: base)?.absoluteURL,
+              url.scheme == base.scheme, url.host == base.host
+        else { return nil }
+        return url
+    }
+
     static func openPanel(_ context: WKWebExtensionContext, owner: Extensions) {
         guard let path = panelPath[context.uniqueIdentifier] ?? defaultPanel(context) else { return }
-        let url = context.baseURL.appendingPathComponent(path.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+        // Resolved, not appended: a path can carry a query — Claude's names
+        // the tab its panel is for, sidepanel.html?tabId=… — which appended
+        // would be escaped into the file's name.
+        guard let url = ExtensionShims.page(path, in: context) else { return }
         owner.browser?.open(url, foreground: true)
     }
 
@@ -3066,24 +3750,40 @@ enum ExtensionShims {
 @MainActor
 enum ExtensionAuth {
     private static var waiting: [String: (tab: Tab.ID, finish: (Result<URL, Error>) -> Void)] = [:]
-    private static var watch: AnyCancellable?
+    /// One per flow: whether its tab is still somewhere.
+    private static var watches: [String: Timer] = [:]
 
     struct Declined: LocalizedError {
         var errorDescription: String? { "The user did not approve access." }
     }
 
     static func run(_ url: URL, extension id: String, browser: Browser) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
+        if #available(macOS 15.4, *) { try Extensions.mayOpen(url) }
+        return try await withCheckedThrowingContinuation { continuation in
             waiting[id]?.finish(.failure(Declined()))
             let tab = browser.open(url, foreground: true)
             waiting[id] = (tab.id, { result in continuation.resume(with: result) })
-            // Closing the tab is saying no.
-            watch = browser.$tabs.sink { tabs in
-                for (key, entry) in waiting where !tabs.contains(where: { $0.id == entry.tab }) {
-                    waiting[key] = nil
+            // Closing the tab is saying no. Moved to another window, or to
+            // a space not on screen, it is still there.
+            watches[id]?.invalidate()
+            watches[id] = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
+                MainActor.assumeIsolated {
+                    guard let entry = waiting[id], entry.tab == tab.id else {
+                        watches.removeValue(forKey: id)?.invalidate()
+                        return
+                    }
+                    guard !exists(entry.tab) else { return }
+                    waiting[id] = nil
+                    watches.removeValue(forKey: id)?.invalidate()
                     entry.finish(.failure(Declined()))
                 }
             }
+        }
+    }
+
+    private static func exists(_ id: Tab.ID) -> Bool {
+        Browsers.all.contains { browser in
+            browser.tabs.contains { $0.id == id } || browser.parked.values.contains { $0.tabs.contains { $0.id == id } }
         }
     }
 
@@ -3103,8 +3803,39 @@ enum ExtensionAuth {
         entry.finish(.success(url))
         // The popup, when the answer came in one, goes with the flow's tab:
         // left behind, it would hold a redirect that never loads.
+        watches.removeValue(forKey: id)?.invalidate()
         if from.id != entry.tab { browser.close(from) }
-        if let tab = browser.tabs.first(where: { $0.id == entry.tab }) { browser.close(tab) }
+        // The flow's tab, in whichever window it is now.
+        for home in Browsers.all {
+            if let tab = home.tabs.first(where: { $0.id == entry.tab }) { home.close(tab) }
+        }
+        return true
+    }
+
+    /// The same redirect with no launchWebAuthFlow waiting for it. Some
+    /// extensions open the provider's page with tabs.create and watch that
+    /// tab's address until it reaches their chromiumapp.org one, then close
+    /// the tab (Figma's does). In Chrome the navigation fails onto an error
+    /// page that still carries the address, and tabs.onUpdated reports it;
+    /// in WebKit a failed load never commits, so nothing would. The tab takes
+    /// the address without loading anything, for an installed extension
+    /// that asked for identity. What each extension sees of it is WebKit's
+    /// call, as for any address: tabs or host access, as in Chrome. Left
+    /// open, the tab says what Chrome's would.
+    static func handOver(_ url: URL, mainFrame: Bool, browser: Browser, from webView: WKWebView) -> Bool {
+        guard mainFrame, url.scheme?.lowercased() == "https", let host = url.host()?.lowercased(),
+              host.hasSuffix(".chromiumapp.org") else { return false }
+        let id = String(host.dropLast(".chromiumapp.org".count))
+        guard #available(macOS 15.4, *), let context = Extensions.shared.contexts[id],
+              ExtensionShims.allowed(id, context: context).contains("identity"),
+              let tab = browser.tab(for: webView)
+        else { return false }
+        tab.hold(url)
+        Task { @MainActor [weak tab] in
+            try? await Task.sleep(for: .seconds(4))
+            guard let tab, tab.held == url else { return }
+            tab.failure = "No site at that address."
+        }
         return true
     }
 }
