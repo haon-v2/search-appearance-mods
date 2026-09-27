@@ -1,6 +1,6 @@
 # Appearance Mod Loader — experimental API 1
 
-Search is by **Drice Roland / Office Commun and its contributors**. Appearance-mod support is contributed by **Noah Helms (@haon-v2)**. This unofficial preview preserves Search’s MIT license and is based on `9e31d6ba636f4cad8504c209e07870fa2b68b8ca`.
+Search is by **Drice Roland / Office Commun and its contributors**. Appearance-mod support is contributed by **Noah Helms (@haon-v2)**. This unofficial preview preserves Search’s MIT license and records its integrated stable Search release in `UPSTREAM_VERSION` and its exact commit in `UPSTREAM_COMMIT`.
 
 ## Separate host and packages
 
@@ -30,7 +30,7 @@ Your unmodified installed Search cannot import packages until it includes loader
 - Keychain label: `Search Mod Preview`.
 - Mod folder: `AppearanceMods` inside that app data folder.
 - Cookies and settings use the preview identity; no automatic Search/Curve migration.
-- The upstream automatic updater is disabled in the preview.
+- Official Search’s signed updater cannot replace the preview. The preview checks compatible loader releases through GitHub daily and in Settings → About; installation is manual. See [Updating](UPDATING.md).
 
 Quit and trash the preview app to remove the host. No default-browser registration or personal-profile migration is performed by these instructions.
 

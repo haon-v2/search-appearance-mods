@@ -89,7 +89,6 @@ struct Fold: View {
             }
             if folding, !prefs.sidebar, browser.peeking {
                 AppearanceTabChrome(browser: browser, overlay: true)
-                    .shadow(color: .black.opacity(0.14), radius: 20, y: 4)
                     .transition(.move(edge: .top))
             }
             ZStack(alignment: .leading) {

@@ -64,6 +64,11 @@ try:
     for width,height in [(640,480),(1440,900),(1180,780)]:
         ask(do='resize',width=width,height=height,steps=1);time.sleep(.2)
         state=ask(do='appearance');assert state['width']==width and 0<=state['offset']<=state['maximum']
+    # A new upstream chrome feature must coexist with the mod's right rail.
+    ask(do='appearance',bookmarksBar=True);time.sleep(.3)
+    assert ask(do='appearance')['rail']
+    ask(do='picture',path='/tmp/search-mod-bookmarks-bar.png',page=False)
+    ask(do='appearance',bookmarksBar=False)
     first=next(t['id'] for t in ask(do='tabs')['tabs'] if t['bench'])
     ask(do='select',id=first);ask(do='appearance',offset=0)
     for look in ['light','dark']:
@@ -72,6 +77,9 @@ try:
     ask(do='appearance',settingsPage='appearance')
     ask(do='ui',settings=True);time.sleep(.3)
     ask(do='picture',path='/tmp/search-mod-settings.png',page=False)
+    ask(do='ui',settings=False);ask(do='appearance',settingsPage='about')
+    ask(do='ui',settings=True);time.sleep(.3)
+    ask(do='picture',path='/tmp/search-mod-update-settings.png',page=False)
     ask(do='ui',settings=False,folded=True,peek=True);time.sleep(.5)
     assert ask(do='appearance')['rail']
     ask(do='ui',folded=False,peek=False)

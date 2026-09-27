@@ -30,6 +30,12 @@ Disable or remove mods in the same page. Installing the loader alone changes no 
 
 [Full installation and API guide](docs/APPEARANCE-MODS.md) · [Credits](CREDITS.md) · [Original Search README](README-UPSTREAM.md)
 
+## Updates
+
+**0.1.x needs a one-time manual upgrade** to 0.2.0 or newer: those older builds did not have a preview updater. From 0.2.0, **Settings → About** checks compatible loader releases daily and offers a download when one is available. Quit and replace **Search Mod Preview.app** with the new copy to keep your preview profile and installed mods. Installation is manual; these builds are not signed with Office Commun’s identity.
+
+A GitHub workflow checks for stable Search releases every six hours, attempts integration, builds the app and runs package, update-feed and native UI tests before publishing a compatible preview. Source conflicts or failed tests stop publication. This keeps updates moving without promising that all future Search changes will work unchanged. [Update policy and installation instructions](docs/UPDATING.md).
+
 ## Build and test
 
 ```sh
@@ -39,4 +45,4 @@ python3 Tests/run_appearance_tests.py
 
 The output is `build/Search Mod Preview.app`. Use the preview script, not upstream’s publishing/reset scripts. Swift 6 toolchain and macOS 14+ required. See the guide for isolated native integration tests.
 
-This preview is based on upstream commit `9e31d6ba636f4cad8504c209e07870fa2b68b8ca`. Upstream’s contribution guidelines request a design discussion before substantial changes; no upstream issue or PR has been submitted. Publishing this community fork does not imply acceptance into Search.
+The integrated stable Search release and exact commit are recorded in [UPSTREAM_VERSION](UPSTREAM_VERSION) and [UPSTREAM_COMMIT](UPSTREAM_COMMIT). Upstream’s contribution guidelines request a design discussion before substantial changes; no upstream issue or PR has been submitted. Publishing this community fork does not imply acceptance into Search.

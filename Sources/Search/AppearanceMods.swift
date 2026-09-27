@@ -9,6 +9,9 @@ struct AppearanceTabChrome: View {
       EdgeRailChrome(browser: browser, configuration: rail, overlay: overlay)
     } else {
       TabBar(browser: browser)
+        .background {
+          if overlay { Palette.ground.shadow(color: .black.opacity(0.14), radius: 20, y: 4) }
+        }
     }
   }
 }

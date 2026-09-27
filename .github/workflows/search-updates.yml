@@ -1,0 +1,99 @@
+name: Search update compatibility
+on:
+  schedule:
+    - cron: '23 */6 * * *'
+  workflow_dispatch:
+  push:
+    branches: [codex/appearance-mod-loader]
+permissions:
+  contents: read
+concurrency:
+  group: search-appearance-releases
+  cancel-in-progress: false
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 30
+    outputs:
+      publish: ${{ steps.sync.outputs.publish }}
+      tag: ${{ steps.metadata.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set contribution identity
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - name: Integrate the latest stable Search release
+        id: sync
+        run: python3 Scripts/sync_upstream.py
+      - name: Build the preview
+        if: steps.sync.outputs.publish == 'true' || github.event_name != 'schedule'
+        run: bash build-mod-preview.sh
+      - name: Validate loader and update manifests
+        if: steps.sync.outputs.publish == 'true' || github.event_name != 'schedule'
+        run: |
+          python3 Tests/run_appearance_tests.py
+          python3 Tests/run_loader_update_tests.py
+      - name: Exercise the actual app in an isolated profile
+        if: steps.sync.outputs.publish == 'true' || github.event_name != 'schedule'
+        run: python3 Scripts/test_native.py
+      - name: Package checked release
+        if: steps.sync.outputs.publish == 'true' || github.event_name != 'schedule'
+        id: metadata
+        run: |
+          python3 Scripts/package_loader.py
+          echo "tag=appearance-mods-v$(cat LOADER_VERSION)" >> "$GITHUB_OUTPUT"
+          git bundle create build/checked-source.bundle HEAD
+      - uses: actions/upload-artifact@v4
+        if: steps.sync.outputs.publish == 'true' || github.event_name != 'schedule'
+        with:
+          name: checked-loader
+          retention-days: 14
+          path: |
+            build/checked-source.bundle
+            build/releases/*/*.zip
+            build/releases/*/*.tar.gz
+            build/releases/*/SHA256SUMS.txt
+            build/releases/*/loader-update.json
+            build/releases/*/release-notes.md
+  publish:
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: checked-loader
+          path: checked
+      # This job does not execute code or binaries from the merged source.
+      - name: Publish the tested integration
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$TAG" =~ ^appearance-mods-v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git fetch checked/checked-source.bundle HEAD
+          candidate=$(git rev-parse FETCH_HEAD)
+          git merge-base --is-ancestor HEAD "$candidate"
+          git config credential.helper '!gh auth git-credential'
+          git push origin "$candidate:refs/heads/codex/appearance-mod-loader"
+          dir="checked/releases/$TAG"
+          (cd "$dir" && sha256sum -c SHA256SUMS.txt)
+          if gh release view "$TAG" --json isDraft > release-state.json 2>/dev/null; then
+            # A rerun may resume a draft, but must never overwrite a public build.
+            [[ "$(jq -r .isDraft release-state.json)" == true ]] || exit 0
+          else
+            gh release create "$TAG" --target "$candidate" --draft --prerelease --title "Appearance Mod Loader ${TAG#appearance-mods-v} Preview" --notes-file "$dir/release-notes.md"
+          fi
+          gh release upload "$TAG" --clobber "$dir/Search-Appearance-Mod-Loader-macOS-arm64.zip" "$dir/Search-Appearance-Mod-Loader-Source.tar.gz" "$dir/SHA256SUMS.txt" "$dir/loader-update.json"
+          gh release edit "$TAG" --draft=false
