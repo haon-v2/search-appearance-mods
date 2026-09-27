@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Package the checked app and publishable manifest; never ship a mod."""
-import hashlib, json, plistlib, shutil, subprocess
+import hashlib, json, plistlib, re, shutil, subprocess
 from pathlib import Path
 root = Path(__file__).resolve().parents[1]
 version = (root/'LOADER_VERSION').read_text().strip()
@@ -15,6 +15,16 @@ assert info['CFBundleIdentifier'] == 'local.noah.search.mod-preview'
 assert info['CFBundleShortVersionString'] == version and int(info['CFBundleVersion']) == build
 assert info['SearchUpstreamVersion'] == (root/'UPSTREAM_VERSION').read_text().strip()
 subprocess.run(['codesign', '--verify', '--deep', '--strict', str(app)], check=True)
+executable = app/'Contents/MacOS/SearchModPreview'
+assert subprocess.check_output(['lipo','-archs',str(executable)],text=True).strip() == 'arm64', 'Release requires ARM64'
+load_commands = subprocess.check_output(['xcrun','vtool','-show-build',str(executable)],text=True)
+minimum = re.search(r'\bminos\s+([0-9.]+)',load_commands)
+assert minimum, 'Cannot verify deployment target'
+def os_version(s):
+    parts = tuple(map(int,s.split('.')))
+    return parts + (0,)*(3-len(parts))
+assert os_version(minimum.group(1)) <= os_version(info['LSMinimumSystemVersion']), 'Upstream now requires newer macOS; review before publishing'
+
 # Packaging an app containing an accidentally bundled JSON mod is an error.
 assert not list((app/'Contents/Resources').glob('*.json')), 'No mods may be bundled'
 if (stage/app.name).exists(): shutil.rmtree(stage/app.name)
@@ -27,7 +37,7 @@ subprocess.run(['ditto','-c','-k','--sequesterRsrc','--keepParent',str(stage),st
 source = out/'Search-Appearance-Mod-Loader-Source.tar.gz'
 subprocess.run(['git','archive','--format=tar.gz','--prefix=search-appearance-mod-loader/','-o',str(source),'HEAD'],cwd=root,check=True)
 url = 'https://github.com/haon-v2/search-appearance-mods/releases/'
-manifest = dict(schemaVersion=1,version=version,build=build,upstreamVersion=(root/'UPSTREAM_VERSION').read_text().strip(),minimumSystemVersion='14.0',architecture='arm64',archive=url+'download/'+tag+'/'+archive.name,sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),releaseURL=url+'tag/'+tag)
+manifest = dict(schemaVersion=1,version=version,build=build,upstreamVersion=(root/'UPSTREAM_VERSION').read_text().strip(),minimumSystemVersion=info['LSMinimumSystemVersion'],architecture='arm64',archive=url+'download/'+tag+'/'+archive.name,sha256=hashlib.sha256(archive.read_bytes()).hexdigest(),releaseURL=url+'tag/'+tag)
 (out/'loader-update.json').write_text(json.dumps(manifest,indent=2)+'\n')
 files = [archive,source,out/'loader-update.json']
 (out/'SHA256SUMS.txt').write_text(''.join(hashlib.sha256(f.read_bytes()).hexdigest()+'  '+f.name+'\n' for f in files))
